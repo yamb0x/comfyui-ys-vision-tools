@@ -17,6 +17,8 @@ A visual effects system for ComfyUI providing GPU-accelerated point tracking and
 - Apply 10+ line styles (solid, electric, pulsing, particle trails, wave modulation)
 - Compose layers with blend modes and alpha compositing
 
+![example workflow](images/example-workflow.png)
+
 ## Installation
 
 ```bash
@@ -82,8 +84,6 @@ Alpha-composites layer onto base image.
 **Outputs:** Composited image
 
 ## Example Workflow
-
-![example workflow](images/example-workflow.png)
 
 **Typical configuration:**
 - Detection: `gradient_magnitude` at 0.6 sensitivity, 500 points
