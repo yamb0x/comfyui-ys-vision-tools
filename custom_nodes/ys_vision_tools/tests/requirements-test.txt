@@ -1,0 +1,10 @@
+# Test dependencies for ys_vision_tools
+pytest>=8.0.0
+pytest-cov>=4.0.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+
+# GPU dependencies (optional, tests will skip if not available)
+# cupy-cuda12x>=12.3.0
+# faiss-gpu>=1.7.4
+# torch>=2.0.0

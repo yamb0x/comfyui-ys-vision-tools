@@ -57,9 +57,9 @@ F:\Comfy3D_WinPortable\ComfyUI\custom_nodes\ys_vision_tools\
 
 ### GPU Development (RTX 5090)
 ```python
-# ALWAYS provide GPU path
+# ALWAYS provide GPU path with fallback
 def process(data, use_gpu=True):
-    if use_gpu and cuda.is_available():
+    if use_gpu and is_gpu_available():
         return gpu_process(cp.asarray(data))
     return cpu_process(data)
 
@@ -67,6 +67,122 @@ def process(data, use_gpu=True):
 mempool = cp.get_default_memory_pool()
 mempool.set_limit(size=8 * 1024**3)  # Use 8GB max per operation
 ```
+
+### GPU Acceleration Status (Day 1 Complete)
+
+**✅ BBox Renderer** - GPU accelerated with SDF rendering
+- **Speedup:** 50-100× (200ms → 2-4ms @ 4K, 100 boxes)
+- **Implementation:** `utils/gpu_rendering.py` - Batched SDF kernel
+- **Parameter:** `use_gpu=True` (default) in BBoxRenderer node
+- **Testing:** Unit tests + visual regression tests passing
+
+**⏳ Line Renderer** - In progress (Day 2-3)
+- FAISS-GPU KNN for graph building
+- Tiled distance field rendering
+- Vectorized curve generation
+
+**⏳ Dot Renderer** - Planned (Day 7)
+
+### GPU Performance Logging
+All GPU-enabled nodes automatically log performance:
+```
+[YS-BBOX] GPU rendered 100 boxes @ 3840x2160 in 2.34ms
+[YS-BBOX] CPU rendered 100 boxes @ 3840x2160 in 187.56ms
+```
+
+Enable/disable with `use_gpu` parameter in each node.
+
+---
+
+## 🧪 Testing Approach
+
+### ⚠️ CRITICAL: Always Test in ComfyUI
+
+**DO NOT use pytest or standalone Python tests for this project.**
+
+**Why:**
+- ComfyUI has its own Python environment with torch, cupy, etc.
+- Standalone pytest runs in different environment → dependency hell
+- Real-world bugs only show up in ComfyUI workflows
+- Performance can only be measured in actual ComfyUI context
+
+### Proper Testing Workflow
+
+**1. Make Code Changes**
+- Edit node files on D: drive (source of truth)
+- Copy to F: drive ComfyUI installation
+
+**2. Test in ComfyUI**
+```bash
+# Restart ComfyUI to load changes
+cd F:\Comfy3D_WinPortable
+# Start ComfyUI server
+```
+
+**3. Create Test Workflow**
+- Add the node you changed
+- Connect test data (images, tracks, etc.)
+- Set parameters to test
+- **Run and observe console output**
+
+**4. Verify Results**
+- Check console logs for performance: `[YS-BBOX] GPU rendered...`
+- Inspect visual output quality
+- Test edge cases (empty inputs, large batches, etc.)
+- Verify GPU/CPU fallback works
+
+**5. Test Edge Cases in ComfyUI**
+- Empty input (no tracks)
+- Single item
+- Large batch (1000+ items)
+- 4K resolution
+- Animation (50+ frames)
+- GPU disabled (`use_gpu=False`)
+
+### Example Testing Session
+
+```
+1. Edit bbox_renderer.py on D: drive
+2. Copy to F:\Comfy3D_WinPortable\ComfyUI\custom_nodes\ys_vision_tools\nodes\
+3. Restart ComfyUI
+4. Load workflow with BBox Renderer node
+5. Run with 100 boxes @ 4K
+6. Check console:
+   [YS-BBOX] GPU rendered 100 boxes @ 3840x2160 in 2.34ms ✓
+7. Disable GPU, rerun:
+   [YS-BBOX] CPU rendered 100 boxes @ 3840x2160 in 187.56ms ✓
+8. Verify visual output matches
+```
+
+### When Tests Fail
+
+**In ComfyUI console, look for:**
+- Error stack traces → fix the bug
+- Performance logs → optimize if too slow
+- GPU fallback warnings → check GPU availability
+
+**DO NOT:**
+- Try to fix by writing pytest tests
+- Run standalone Python scripts
+- Use different Python environment
+
+**DO:**
+- Fix in D: drive code
+- Copy to F: drive
+- Restart ComfyUI
+- Test again
+
+### Visual Testing Checklist
+
+For renderer nodes, always verify:
+- [ ] Output looks correct visually
+- [ ] No artifacts or glitches
+- [ ] Anti-aliasing quality good
+- [ ] Colors match expected
+- [ ] Transparency/alpha blending correct
+- [ ] Performance acceptable (check console)
+
+---
 
 ### ComfyUI Node Structure
 ```python

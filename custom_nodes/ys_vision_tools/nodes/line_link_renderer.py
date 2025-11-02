@@ -5,6 +5,7 @@ Renders sophisticated curves with 15+ mathematical types and 10+ animated styles
 
 import numpy as np
 import cv2
+import time
 from typing import List, Tuple, Optional, Dict, Any
 
 from ..utils import (
@@ -16,12 +17,19 @@ from ..utils import (
     numpy_to_comfyui
 )
 
-# Try importing optional dependencies
+# GPU imports
 try:
     import cupy as cp
     CUPY_AVAILABLE = True
 except ImportError:
     CUPY_AVAILABLE = False
+
+# GPU graph builder
+try:
+    from ..utils.gpu_graph import GPUGraphBuilder, GPU_GRAPH_AVAILABLE
+except ImportError:
+    GPU_GRAPH_AVAILABLE = False
+    GPUGraphBuilder = None
 
 
 class AdvancedLineLinkRendererNode:
