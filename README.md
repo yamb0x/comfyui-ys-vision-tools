@@ -83,11 +83,7 @@ Alpha-composites layer onto base image.
 
 ## Example Workflow
 
-*(Note: Workflow image pending - see [issue #1](https://github.com/yamb0x/comfyui-ys-vision-tools/issues/1))*
-
-```
-Load Image → Track Detect → Line Link Renderer → Dot Renderer → Layer Merge → Composite Over
-```
+![example workflow](images/example-workflow.png)
 
 **Typical configuration:**
 - Detection: `gradient_magnitude` at 0.6 sensitivity, 500 points
