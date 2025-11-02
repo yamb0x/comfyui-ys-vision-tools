@@ -1,233 +1,168 @@
 # YS-vision-tools
 
-**Advanced ComfyUI custom nodes for GPU-accelerated vision overlays with experimental mathematical curves and smart detection methods.**
+Advanced ComfyUI custom nodes for GPU-accelerated vision overlays with experimental mathematical curves and smart detection methods.
 
 ![Version](https://img.shields.io/badge/version-0.1.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10+-green)
 ![CUDA](https://img.shields.io/badge/CUDA-12.x-orange)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
-## 🚀 What Makes This Special
+## Overview
 
-**YS-vision-tools** is not just another overlay tool. It's a sophisticated visual effects system that:
+A visual effects system for ComfyUI providing GPU-accelerated point tracking and mathematical curve rendering. Designed for RTX 5090 performance targets (4K @ 60fps).
 
-- **Tracks intelligently** using 7+ detection methods (gradient, phase, optical flow, YOLO)
-- **Renders uniquely** with 15+ curve types (spirals, field lines, Fourier, neural flow)
-- **Performs blazingly** at 4K@60fps on RTX 5090
-- **Styles creatively** with electric, pulsing, wave, and particle effects
+**Core capabilities:**
+- Track points using gradient, optical flow, phase congruency, structure tensor, saliency, YOLO, or hybrid methods
+- Render connections with 15+ curve types (Bézier, spirals, field lines, Fourier series, elastic curves)
+- Apply 10+ line styles (solid, electric, pulsing, particle trails, wave modulation)
+- Compose layers with blend modes and alpha compositing
 
-## 🎯 Key Features
+## Installation
 
-### Smart Detection (7+ Methods)
-1. **Gradient Magnitude** - Sobel/Scharr-based edge detection
-2. **Phase Congruency** - Frequency domain feature detection
-3. **Structure Tensor** - Advanced corner quality metrics
-4. **Optical Flow** - Motion-based tracking between frames
-5. **Saliency Map** - Visual attention modeling
-6. **Object Detection** - YOLO-based semantic tracking
-7. **Hybrid Adaptive** - Intelligent method combination
-
-### Advanced Curve Mathematics (15+ Types)
-- **Classic**: Straight, Quadratic/Cubic Bezier, Catmull-Rom
-- **Mathematical**: Fourier series, Logarithmic spirals
-- **Physics-Based**: Elastic curves, Field lines, Gravitational paths
-- **Graph-Based**: Voronoi edges, Delaunay triangulation, MST
-- **Experimental**: Neural flow patterns
-
-### Rendering Styles (10+ Types)
-- **Basic**: Solid, Dotted, Dashed, Dash-dot
-- **Effects**: Gradient fade, Pulsing animation, Electric/Lightning
-- **Advanced**: Particle trails, Wave modulation
-
-## 🛠 Installation
-
-### Requirements
-- Python 3.10+
-- ComfyUI installation
-- NVIDIA GPU with CUDA 12.x (RTX 5090 recommended)
-
-### Step 1: Clone to ComfyUI
 ```bash
 cd ComfyUI/custom_nodes/
-git clone https://github.com/your-repo/ys-vision-tools.git
-```
-
-### Step 2: Install Dependencies
-```bash
-cd ys-vision-tools
+git clone https://github.com/yamb0x/comfyui-ys-vision-tools.git
+cd comfyui-ys-vision-tools
 pip install -r requirements.txt
 ```
 
-### Step 3: Install GPU Libraries (Recommended)
-For maximum performance on RTX 5090:
+**GPU acceleration (recommended):**
 ```bash
-# Install CuPy for GPU acceleration
 pip install cupy-cuda12x
-
-# Install PyTorch with CUDA support
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-
-# Optional: Install YOLO for object detection
-pip install ultralytics
+pip install ultralytics  # for YOLO detection
 ```
 
-### Step 4: Restart ComfyUI
-```bash
-# Restart ComfyUI to load the new nodes
+Restart ComfyUI after installation.
+
+## Available Nodes
+
+### Track Detect (Enhanced)
+Detects and tracks points using configurable methods.
+
+**Inputs:** Image, detection method, sensitivity, max points, area filter  
+**Outputs:** Track coordinates, count, confidence, debug visualization  
+**Methods:** gradient_magnitude, phase_congruency, structure_tensor, optical_flow, saliency_map, object_detection, hybrid_adaptive
+
+GPU-accelerated with Kalman filtering and area-based filtering.
+
+### Line Link Renderer (Advanced)
+Renders mathematical curves connecting tracked points.
+
+**Inputs:** Tracks, dimensions, curve type, line style, parameters  
+**Outputs:** RGBA layer  
+**Curve types:** straight, bezier_quadratic, bezier_cubic, catmull_rom, logarithmic_spiral, elastic_curve, fourier_series, field_line, gravitational_path, voronoi_edges, delaunay_triangulation, minimum_spanning_tree, neural_flow_field  
+**Line styles:** solid, dotted, dashed, dash_dot, gradient_fade, pulsing, electric, lightning, particle_trail, wave_modulation
+
+### Dot Renderer
+Renders tracked points as styled markers.
+
+**Inputs:** Tracks, dimensions, size, style, glow  
+**Outputs:** RGBA layer  
+**Styles:** solid, ring, cross, plus, square, diamond
+
+### Palette Map
+Generates color palettes for visualization.
+
+**Inputs:** Palette type, color count  
+**Outputs:** Palette data  
+**Types:** rainbow, viridis, plasma, inferno, magma, cool, warm, custom
+
+### Layer Merge
+Composites multiple RGBA layers.
+
+**Inputs:** 2-4 layers, blend mode, opacity  
+**Outputs:** Merged layer  
+**Modes:** normal, add, multiply, screen, overlay, max, min
+
+### Composite Over
+Alpha-composites layer onto base image.
+
+**Inputs:** Base image, layer, opacity, offset  
+**Outputs:** Composited image
+
+## Example Workflow
+
+*(Note: Workflow image pending - see [issue #1](https://github.com/yamb0x/comfyui-ys-vision-tools/issues/1))*
+
+```
+Load Image → Track Detect → Line Link Renderer → Dot Renderer → Layer Merge → Composite Over
 ```
 
-## 📦 Available Nodes
+**Typical configuration:**
+- Detection: `gradient_magnitude` at 0.6 sensitivity, 500 points
+- Curves: `logarithmic_spiral` with `electric` style
+- Dots: `ring` style with 8.0 glow
+- Blend: `add` mode
 
-### 1. Track Detect (Enhanced) 🎯
-Smart detection with 7+ methods
-- **Inputs**: Image, detection method, sensitivity
-- **Outputs**: Tracks (point coordinates), count, confidence, debug visualization
-- **Features**: GPU acceleration, Kalman filtering, area filtering
+## Performance
 
-### 2. Line Link Renderer (Advanced) 🌀
-Advanced curve rendering with mathematical precision
-- **Inputs**: Tracks, image dimensions, curve type, line style
-- **Outputs**: RGBA layer
-- **Curve Types**: 15+ mathematical curves
-- **Styles**: 10+ animated line styles
+Benchmarks on RTX 5090 with GPU acceleration:
 
-### 3. Dot Renderer ⚫
-Render tracked points as styled dots
-- **Inputs**: Tracks, image dimensions, dot size, style
-- **Outputs**: RGBA layer
-- **Styles**: Solid, ring, cross, plus, square, diamond
-- **Features**: Glow effects
+| Resolution | Detection | Curves | Render | Total  | Target FPS |
+|------------|-----------|--------|--------|--------|------------|
+| 1080p      | <5ms      | <2ms   | <3ms   | <10ms  | 100+       |
+| 4K         | <10ms     | <5ms   | <8ms   | <23ms  | 60         |
+| 8K         | <25ms     | <10ms  | <20ms  | <55ms  | 18+        |
 
-### 4. Palette Map 🎨
-Create color palettes for visualization
-- **Inputs**: Palette type, number of colors
-- **Outputs**: Palette data
-- **Types**: Rainbow, Viridis, Plasma, Inferno, Magma, Cool, Warm, Custom
+## Detection Method Guide
 
-### 5. Layer Merge 🔀
-Merge multiple RGBA layers with blend modes
-- **Inputs**: 2-4 layers, blend mode, opacity
-- **Outputs**: Merged layer
-- **Modes**: Normal, Add, Multiply, Screen, Overlay, Max, Min
+**gradient_magnitude** - Edge detection via Sobel/Scharr operators. Fast, works on high-texture images.  
+**phase_congruency** - Frequency-domain features. Lighting-invariant, good for patterns.  
+**structure_tensor** - Corner detection. Identifies keypoints and junctions.  
+**optical_flow** - Motion tracking between frames. Requires sequential input.  
+**saliency_map** - Visual attention modeling. Highlights perceptually salient regions.  
+**object_detection** - YOLO-based semantic detection. Tracks specific object classes.  
+**hybrid_adaptive** - Combines multiple methods. Best overall accuracy, higher compute cost.
 
-### 6. Composite Over 🎬
-Composite RGBA layer over base image
-- **Inputs**: Base image, layer, opacity
-- **Outputs**: Composited image
-- **Features**: Offset positioning, automatic resizing
+## Curve Type Reference
 
-## 🎬 Example Workflow
+**straight** - Direct point-to-point connections  
+**bezier_quadratic/cubic** - Smooth controllable curves  
+**catmull_rom** - Interpolating spline through all points  
+**logarithmic_spiral** - Natural spiral growth pattern  
+**elastic_curve** - Spring-like bouncing paths  
+**fourier_series** - Harmonic wave compositions  
+**field_line** - Magnetic field visualization  
+**gravitational_path** - Physics-based drooping curves  
+**voronoi_edges/delaunay_triangulation** - Graph-based spatial partitioning  
+**neural_flow_field** - ML-guided flow patterns
 
-```
-[Load Image]
-    ↓
-[Track Detect (Enhanced)]
-    - Method: gradient_magnitude
-    - Sensitivity: 0.6
-    - Points: 500
-    ↓
-[Line Link Renderer (Advanced)]
-    - Curve: logarithmic_spiral
-    - Style: electric
-    - Spiral turns: 1.5
-    ↓
-[Dot Renderer]
-    - Size: 4.0
-    - Style: ring
-    - Glow: 8.0
-    ↓
-[Layer Merge]
-    - Blend: add
-    ↓
-[Composite Over]
-    - Base: original image
-```
-
-## ⚡ Performance Targets
-
-| Resolution | Detection | Curves | Render | Total  | FPS |
-|------------|-----------|--------|--------|--------|-----|
-| 1080p      | <5ms      | <2ms   | <3ms   | <10ms  | 100+|
-| 4K         | <10ms     | <5ms   | <8ms   | <23ms  | 43+ |
-| 8K         | <25ms     | <10ms  | <20ms  | <55ms  | 18+ |
-
-*Benchmarks on NVIDIA RTX 5090 with GPU acceleration enabled*
-
-## 🔧 Configuration
-
-### GPU Settings
-The package automatically configures GPU memory for optimal performance:
-```python
-# Automatic GPU memory management
-# - Uses 8GB per operation (safe for 24GB VRAM)
-# - PyTorch uses 80% of available memory
-# - TensorFloat32 enabled for performance
-```
-
-### Detection Method Selection
-
-**When to use each method:**
-- **Gradient Magnitude**: High-texture images, edges
-- **Phase Congruency**: Frequency-based features, lighting-invariant
-- **Structure Tensor**: Corners, keypoints
-- **Optical Flow**: Moving objects, temporal tracking
-- **Saliency Map**: Visual attention, salient regions
-- **Object Detection**: Semantic objects (people, cars, faces)
-- **Hybrid Adaptive**: Best overall results, combines methods
-
-### Curve Type Selection
-
-**Visual characteristics:**
-- **Straight**: Clean, technical
-- **Bezier**: Smooth, controllable
-- **Catmull-Rom**: Interpolating spline
-- **Logarithmic Spiral**: Organic, natural
-- **Elastic**: Bouncy, dynamic
-- **Fourier Series**: Wave-like, rhythmic
-- **Field Lines**: Magnetic, flowing
-- **Gravitational**: Drooping, weighted
-
-## 🧪 Testing
+## Development
 
 ```bash
-# Run unit tests
+# Unit tests
 pytest tests/unit/
 
-# Run visual tests
+# Visual regression tests
 python tests/visual/generate_references.py
 python tests/visual/compare_outputs.py
 
-# Run performance benchmarks
+# GPU benchmarks
 python tests/performance/benchmark_gpu.py
 ```
 
-## 📊 Development Status
+**Project status:**
+- Phase 1 (complete): Core tracking and curve rendering
+- Phase 2 (in progress): Extended renderers (bbox, blur, HUD, MV-look)
+- Phase 3 (planned): Optimization passes
+- Phase 4 (planned): Neural-guided features
 
-- ✅ **Phase 1 Complete**: Core tracking and advanced rendering
-- 🚧 **Phase 2 In Progress**: Extended renderers (BBox, Blur, HUD, MVLook)
-- 📅 **Phase 3 Planned**: Optimization (already baseline GPU-optimized)
-- 🔮 **Phase 4 Planned**: Research features (neural-guided curves)
+## Technical Notes
 
-## 🤝 Contributing
+GPU memory automatically configured for 8GB per operation (safe limit for 24GB VRAM). PyTorch uses 80% available memory. TensorFloat32 enabled by default.
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+All curve implementations use proper mathematical equations, not approximations. Rendering uses anti-aliased line drawing with sub-pixel accuracy.
 
-## 📜 License
+## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT License - see LICENSE file
 
-## 🙏 Acknowledgments
+## Credits
 
-- Built for ComfyUI by Yambo Studio
-- Optimized for NVIDIA RTX 5090
-- Inspired by experimental VFX and mathematical art
-
-## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/your-repo/ys-vision-tools/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-repo/ys-vision-tools/discussions)
-- **Documentation**: [docs/plans/README.md](docs/plans/README.md)
+Developed by Yambo Studio for ComfyUI  
+Optimized for NVIDIA RTX 5090
 
 ---
 
-**Made with ❤️ for the ComfyUI community**
+**Support:** [GitHub Issues](https://github.com/yamb0x/comfyui-ys-vision-tools/issues) | **Documentation:** [docs/plans/](docs/plans/)
