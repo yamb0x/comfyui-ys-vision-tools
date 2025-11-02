@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__ide__executeCode",
+      "Bash(chmod:*)",
+      "Bash(./install-shadcn.sh:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(cd:*)",
+      "Bash(npm install:*)",
+      "Bash(npm view:*)",
+      "Bash(lsof:*)"
+    ],
+    "deny": []
+  }
+}

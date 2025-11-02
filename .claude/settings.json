@@ -1,0 +1,46 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "hooks": {
+    "user-prompt-submit": [
+      {
+        "enabled": true,
+        "command": "echo '⚠️  REMINDER: Check CLAUDE.md workflow before starting any task!' && echo '1. Create plan in .claude/tasks/TASK_NAME.md' && echo '2. Get approval before implementation' && echo '3. Use TodoWrite for tracking'"
+      },
+      {
+        "enabled": true,
+        "command": "./.claude/hooks/skill-activation-prompt.sh"
+      }
+    ],
+    "post-tool-use": [
+      {
+        "enabled": true,
+        "command": "./.claude/hooks/post-tool-use-tracker.sh"
+      }
+    ]
+  },
+  "preferences": {
+    "autoSave": true,
+    "contextWindow": 200000,
+    "maxTokens": 8192,
+    "temperature": 0.1,
+    "streaming": true,
+    "parallelToolCalls": true
+  },
+  "performance": {
+    "enableCaching": true,
+    "cacheTimeout": 3600,
+    "batchOperations": true,
+    "maxParallelRequests": 3
+  },
+  "workflow": {
+    "autoCreateTodos": true,
+    "validateBeforeEdit": true,
+    "useRelativePaths": false,
+    "preferExistingFiles": true
+  },
+  "safety": {
+    "requireConfirmation": false,
+    "backupOnEdit": false,
+    "validateSyntax": true
+  }
+}

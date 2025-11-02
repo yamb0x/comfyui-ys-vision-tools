@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schemas.mcp.dev/config.json",
+  "version": "1.0",
+  "name": "production-tool-2025",
+  "description": "MCP server configuration for Production Tool 2.0",
+  "servers": {
+    "context7": {
+      "command": "npx",
+      "args": ["@upstash/context7-mcp@latest"],
+      "description": "Library documentation and code examples",
+      "enabled": true
+    },
+    "magic": {
+      "command": "npx", 
+      "args": ["@magicuidesign/mcp@latest"],
+      "description": "UI component generation and design system integration",
+      "enabled": true
+    },
+    "sequential": {
+      "command": "npx",
+      "args": ["@modelcontextprotocol/server-sequential-thinking@latest"],
+      "description": "Complex analysis and multi-step reasoning",
+      "enabled": true
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"],
+      "description": "Browser automation and E2E testing",
+      "enabled": true
+    }
+  },
+  "preferences": {
+    "autoStart": true,
+    "timeout": 30000,
+    "retries": 3
+  },
+  "development": {
+    "logLevel": "info",
+    "debugMode": false
+  }
+}

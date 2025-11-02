@@ -1,0 +1,21 @@
+# YS-vision-tools Requirements
+# Advanced ComfyUI custom nodes for GPU-accelerated vision overlays
+
+# Core dependencies
+numpy>=1.21.0
+opencv-python>=4.5.0
+scipy>=1.7.0
+
+# Optional GPU acceleration (highly recommended for RTX 5090)
+# Install with: pip install cupy-cuda12x torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# cupy-cuda12x>=12.0.0  # For CUDA 12.x and RTX 5090
+# torch>=2.0.0          # PyTorch for GPU operations
+# torchvision>=0.15.0   # PyTorch vision utilities
+
+# Optional advanced features
+# ultralytics>=8.0.0    # YOLO for object detection (optional)
+# onnxruntime-gpu       # Optimized inference (optional)
+
+# Development dependencies (for testing)
+# pytest>=7.0.0
+# pytest-cov>=4.0.0

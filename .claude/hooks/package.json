@@ -1,0 +1,13 @@
+{
+  "name": "claude-hooks",
+  "version": "1.0.0",
+  "description": "Claude Code hooks for skills system auto-activation",
+  "type": "module",
+  "scripts": {
+    "test:activation": "tsx skill-activation-prompt.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0"
+  }
+}

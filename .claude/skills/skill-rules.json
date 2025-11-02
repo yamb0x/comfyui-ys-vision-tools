@@ -1,0 +1,93 @@
+{
+  "gpu-optimization": {
+    "type": "domain",
+    "enforcement": "suggest",
+    "priority": "high",
+    "promptTriggers": {
+      "keywords": [
+        "gpu",
+        "cuda",
+        "cupy",
+        "rtx",
+        "vram",
+        "memory pool",
+        "kernel",
+        "parallel",
+        "acceleration",
+        "benchmark",
+        "profile"
+      ],
+      "intentPatterns": [
+        "(optimize|accelerate|speed up).*?(gpu|cuda|processing)",
+        "(implement|add).*?(gpu|cuda|cupy).*?path",
+        "(benchmark|profile|measure).*?performance"
+      ]
+    },
+    "pathPatterns": [
+      "**/utils/gpu_*.py",
+      "**/nodes/**_gpu.py",
+      "**/tests/performance/**"
+    ],
+    "disabled": true
+  },
+  "computer-vision": {
+    "type": "domain",
+    "enforcement": "suggest",
+    "priority": "high",
+    "promptTriggers": {
+      "keywords": [
+        "detection",
+        "tracking",
+        "opencv",
+        "gradient",
+        "optical flow",
+        "saliency",
+        "yolo",
+        "threshold",
+        "corner",
+        "blob"
+      ],
+      "intentPatterns": [
+        "(detect|track|find).*?(points|features|objects)",
+        "(implement|add).*?detection.*?method",
+        "(process|analyze).*?(image|frame|video)"
+      ]
+    },
+    "pathPatterns": [
+      "**/nodes/track_*.py",
+      "**/nodes/*_detect*.py",
+      "**/utils/image_*.py"
+    ],
+    "disabled": true
+  },
+  "mathematical-curves": {
+    "type": "domain",
+    "enforcement": "suggest",
+    "priority": "high",
+    "promptTriggers": {
+      "keywords": [
+        "bezier",
+        "spline",
+        "curve",
+        "spiral",
+        "fourier",
+        "catmull",
+        "hermite",
+        "parametric",
+        "equation"
+      ],
+      "intentPatterns": [
+        "(implement|add).*?(curve|spline|spiral)",
+        "(calculate|compute).*?mathematical",
+        "(render|draw).*?(line|curve|path)"
+      ]
+    },
+    "pathPatterns": [
+      "**/nodes/line_*.py",
+      "**/utils/curve_*.py",
+      "**/nodes/*_renderer.py"
+    ],
+    "disabled": true
+  },
+  "_comment": "Skills are disabled for YS-vision-tools. The project uses direct documentation in CLAUDE.md and /docs/plans/ instead of the skills system."
+}
