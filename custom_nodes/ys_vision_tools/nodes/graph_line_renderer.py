@@ -1,6 +1,13 @@
 """
 Graph Line Renderer Node for YS-vision-tools
 Specialized node for network/graph-based line connections
+
+🎨 COLOR PICKER SUPPORT:
+- Visual color picker UI (click the color swatch in ComfyUI)
+- Supports HEX colors: "#ffffff", "#ff0000", "#00ff00"
+- Supports named colors: "red", "orange", "cyan", "white"
+- Backward compatible with legacy float lists: [1.0, 0.5, 0.0]
+- Separate alpha slider for transparency control
 """
 
 import numpy as np
@@ -42,9 +49,19 @@ class GraphLineRendererNode:
 
                 "line_thickness": ("FLOAT", {"default": 1.5, "min": 0.5, "max": 10.0, "step": 0.1}),
                 "opacity": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "color": ("COLOR", {
+                    "default": "#ffffff",
+                    "tooltip": "Click the color swatch to open the visual color picker"
+                }),
             },
             "optional": {
-                "color": ("STRING", {"default": "1.0,1.0,1.0"}),
+                "alpha": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "tooltip": "Transparency level (0=invisible, 1=opaque)"
+                }),
                 "connection_distance": ("FLOAT", {
                     "default": 150.0,
                     "min": 50.0,
@@ -64,8 +81,13 @@ class GraphLineRendererNode:
         self.advanced_node = AdvancedLineLinkRendererNode()
 
     def execute(self, tracks, image_width, image_height, network_type, line_style,
-                line_thickness, opacity, **kwargs):
-        """Render graph-based network lines"""
+                line_thickness, opacity, color, **kwargs):
+        """Render graph-based network lines
+        
+        Args:
+            color: COLOR input (hex/named color)
+            **kwargs: Optional parameters including 'alpha'
+        """
 
         # Map line_style names
         style_map = {
@@ -106,8 +128,9 @@ class GraphLineRendererNode:
         advanced_kwargs = {
             "antialiasing": "2x",
             "samples_per_curve": 30,
-            "fixed_color": kwargs.get('color', '1.0,1.0,1.0'),
-            **graph_params
+            "color": color,  # Pass COLOR input to advanced node
+            **graph_params,
+            **kwargs
         }
 
         # Call advanced node

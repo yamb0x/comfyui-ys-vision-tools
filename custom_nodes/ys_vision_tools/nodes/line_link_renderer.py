@@ -1,6 +1,13 @@
 """
 Advanced Line Link Renderer Node for YS-vision-tools
 Renders sophisticated curves with 15+ mathematical types and 10+ animated styles
+
+🎨 COLOR PICKER SUPPORT:
+- Visual color picker UI for gradient colors (gradient_fade style)
+- Supports HEX colors: "#ffffff", "#ff0000", "#00ff00"
+- Supports named colors: "red", "orange", "cyan", "white"
+- Backward compatible with legacy float lists: [1.0, 0.5, 0.0]
+- Separate gradient_alpha slider for transparency control
 """
 
 import numpy as np
@@ -13,16 +20,19 @@ from ..utils import (
     is_gpu_available,
     CurveGenerator,
     GraphBuilder,
+    GPUCurveBatchGenerator,
+    CUPY_AVAILABLE,
     create_rgba_layer,
-    numpy_to_comfyui
+    numpy_to_comfyui,
+    normalize_color_to_rgba01
 )
 
 # GPU imports
 try:
     import cupy as cp
-    CUPY_AVAILABLE = True
+    # CUPY_AVAILABLE already imported from utils
 except ImportError:
-    CUPY_AVAILABLE = False
+    cp = None
 
 # GPU graph builder
 try:
@@ -47,69 +57,191 @@ class AdvancedLineLinkRendererNode:
                     "straight",
                     "quadratic_bezier",
                     "cubic_bezier",
-                    "catmull_rom",      # Smooth interpolation
-                    "logarithmic_spiral", # Spiral connections
-                    "elastic",          # Physics-based elastic curves
-                    "fourier_series",   # Fourier series approximation
-                    "field_lines",      # Magnetic field simulation
-                    "gravitational",    # Gravity simulation
-                    "delaunay",         # Delaunay triangulation edges
-                    "voronoi_edges",    # Voronoi diagram edges
-                    "minimum_spanning", # MST connections
-                ],),
+                    "catmull_rom",
+                    "logarithmic_spiral",
+                    "elastic",
+                    "fourier_series",
+                    "field_lines",
+                    "gravitational",
+                    "delaunay",
+                    "voronoi_edges",
+                    "minimum_spanning",
+                ], {
+                    "tooltip": "Curve type:\n"
+                               "• straight - Direct line (no params)\n"
+                               "• quadratic_bezier - Uses: overshoot\n"
+                               "• cubic_bezier - Uses: overshoot, control_point_offset\n"
+                               "• catmull_rom - Uses: curve_tension\n"
+                               "• logarithmic_spiral - Uses: spiral_turns\n"
+                               "• elastic - Uses: elastic_stiffness\n"
+                               "• fourier_series - No params (5 harmonics)\n"
+                               "• field_lines - Uses: field_strength\n"
+                               "• gravitational - Uses: gravity_strength\n"
+                               "• delaunay/voronoi_edges/minimum_spanning - Graph-based (overrides graph_mode)"
+                }),
 
                 "line_style": ([
                     "solid",
                     "dotted",
                     "dashed",
                     "dash_dot",
-                    "gradient_fade",    # Gradient along line
-                    "pulsing",         # Animated pulse effect
-                    "electric",        # Lightning-like
-                    "particle_trail",  # Particle system
-                    "wave",           # Sinusoidal modulation
-                ],),
+                    "gradient_fade",
+                    "pulsing",
+                    "electric",
+                    "particle_trail",
+                    "wave",
+                ], {
+                    "tooltip": "Line style:\n"
+                               "• solid - No params\n"
+                               "• dotted - Uses: dot_spacing\n"
+                               "• dashed - Uses: dash_length\n"
+                               "• dash_dot - Uses: dash_length\n"
+                               "• gradient_fade - Uses: gradient_start_color, gradient_end_color\n"
+                               "• pulsing - Uses: pulse_frequency, time\n"
+                               "• electric - No params (randomized)\n"
+                               "• particle_trail - No params (randomized)\n"
+                               "• wave - Uses: wave_amplitude, wave_frequency"
+                }),
 
                 "width_px": ("FLOAT", {"default": 1.5, "min": 0.5, "max": 20.0, "step": 0.1}),
                 "opacity": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "use_gpu": ("BOOLEAN", {"default": True}),
+                "color": ("COLOR", {
+                    "default": "#ffffff",
+                    "tooltip": "Line color (click the color swatch to open the visual color picker)"
+                }),
+                "use_gpu": ("BOOLEAN", {"default": True, "tooltip": "Enable GPU acceleration for graph building and curve generation"}),
             },
             "optional": {
+                "alpha": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "tooltip": "Transparency level (0=invisible, 1=opaque)"
+                }),
                 # Graph construction
-                "graph_mode": (["knn", "radius", "delaunay", "mst", "voronoi"],),
-                "k_neighbors": ("INT", {"default": 3, "min": 1, "max": 20, "step": 1}),
-                "connection_radius": ("FLOAT", {"default": 100.0, "min": 10.0, "max": 500.0, "step": 10.0}),
+                "graph_mode": (["knn", "radius", "delaunay", "mst", "voronoi"], {
+                    "tooltip": "Graph connection strategy. Ignored when curve_type is delaunay/voronoi_edges/minimum_spanning"
+                }),
+                "k_neighbors": ("INT", {
+                    "default": 3, "min": 1, "max": 20, "step": 1,
+                    "tooltip": "Number of nearest neighbors. Only used with graph_mode=knn"
+                }),
+                "connection_radius": ("FLOAT", {
+                    "default": 100.0, "min": 10.0, "max": 500.0, "step": 10.0,
+                    "tooltip": "Connection radius in pixels. Only used with graph_mode=radius"
+                }),
+                
+                # GPU Graph Optimization
+                "delta_y_max": ("FLOAT", {
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 2000.0,
+                    "step": 10.0,
+                    "tooltip": "GPU-only: Max vertical distance for connections (0=disabled). Requires use_gpu=True and FAISS-GPU"
+                }),
+                "degree_cap": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 50,
+                    "step": 1,
+                    "tooltip": "GPU-only: Max connections per point (0=disabled). Requires use_gpu=True and FAISS-GPU"
+                }),
+                "hysteresis_alpha": ("FLOAT", {
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 0.9,
+                    "step": 0.1,
+                    "tooltip": "GPU-only: Smooth edge changes between frames (0=disabled, 0.5=recommended). Requires use_gpu=True and FAISS-GPU"
+                }),
 
                 # Curve parameters
-                "curve_tension": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 2.0, "step": 0.1}),
-                "overshoot": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.05}),
-                "control_point_offset": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.05}),
-                "spiral_turns": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 5.0, "step": 0.1}),
+                "curve_tension": ("FLOAT", {
+                    "default": 0.5, "min": 0.0, "max": 2.0, "step": 0.1,
+                    "tooltip": "Only used by: catmull_rom curve"
+                }),
+                "overshoot": ("FLOAT", {
+                    "default": 0.0, "min": -1.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "Only used by: quadratic_bezier, cubic_bezier curves"
+                }),
+                "control_point_offset": ("FLOAT", {
+                    "default": 0.3, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "Only used by: cubic_bezier curve"
+                }),
+                "spiral_turns": ("FLOAT", {
+                    "default": 0.5, "min": 0.0, "max": 5.0, "step": 0.1,
+                    "tooltip": "Only used by: logarithmic_spiral curve"
+                }),
 
                 # Style parameters
-                "dot_spacing": ("FLOAT", {"default": 5.0, "min": 1.0, "max": 20.0, "step": 0.5}),
-                "dash_length": ("FLOAT", {"default": 10.0, "min": 2.0, "max": 50.0, "step": 1.0}),
-                "gradient_start_color": ("STRING", {"default": "1.0,1.0,1.0"}),  # RGB as string
-                "gradient_end_color": ("STRING", {"default": "0.0,0.5,1.0"}),
-                "pulse_frequency": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 10.0, "step": 0.1}),
-                "wave_amplitude": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 50.0, "step": 1.0}),
-                "wave_frequency": ("FLOAT", {"default": 0.1, "min": 0.01, "max": 1.0, "step": 0.01}),
+                "dot_spacing": ("FLOAT", {
+                    "default": 5.0, "min": 1.0, "max": 20.0, "step": 0.5,
+                    "tooltip": "Only used by: dotted line style"
+                }),
+                "dash_length": ("FLOAT", {
+                    "default": 10.0, "min": 2.0, "max": 50.0, "step": 1.0,
+                    "tooltip": "Only used by: dashed, dash_dot line styles"
+                }),
+                "gradient_start_color": ("COLOR", {
+                    "default": "#ffffff",
+                    "tooltip": "Gradient start color (only for gradient_fade style)"
+                }),
+                "gradient_end_color": ("COLOR", {
+                    "default": "#000000",
+                    "tooltip": "Gradient end color (only for gradient_fade style)"
+                }),
+                "gradient_alpha": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "tooltip": "Transparency for gradient (only for gradient_fade style)"
+                }),
+                "pulse_frequency": ("FLOAT", {
+                    "default": 1.0, "min": 0.1, "max": 10.0, "step": 0.1,
+                    "tooltip": "Only used by: pulsing line style"
+                }),
+                "wave_amplitude": ("FLOAT", {
+                    "default": 5.0, "min": 0.0, "max": 50.0, "step": 1.0,
+                    "tooltip": "Only used by: wave line style"
+                }),
+                "wave_frequency": ("FLOAT", {
+                    "default": 0.1, "min": 0.01, "max": 1.0, "step": 0.01,
+                    "tooltip": "Only used by: wave line style"
+                }),
 
                 # Physics parameters
-                "gravity_strength": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "elastic_stiffness": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 2.0, "step": 0.1}),
-                "field_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1}),
+                "gravity_strength": ("FLOAT", {
+                    "default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "Only used by: gravitational curve"
+                }),
+                "elastic_stiffness": ("FLOAT", {
+                    "default": 0.5, "min": 0.0, "max": 2.0, "step": 0.1,
+                    "tooltip": "Only used by: elastic curve"
+                }),
+                "field_strength": ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1,
+                    "tooltip": "Only used by: field_lines curve"
+                }),
 
                 # Animation
-                "time": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100.0, "step": 0.1}),
-                "seed": ("INT", {"default": 42, "min": 0, "max": 0xffffffff, "step": 1}),
+                "time": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 100.0, "step": 0.1,
+                    "tooltip": "Animation time parameter. Used by: pulsing line style"
+                }),
+                "seed": ("INT", {
+                    "default": 42, "min": 0, "max": 0xffffffff, "step": 1,
+                    "tooltip": "Random seed for: electric, particle_trail line styles"
+                }),
 
                 # Performance
-                "samples_per_curve": ("INT", {"default": 50, "min": 10, "max": 200, "step": 10}),
-                "antialiasing": (["none", "2x", "4x"],),
-
-                # Color
-                "fixed_color": ("STRING", {"default": "1.0,1.0,1.0"}),  # RGB as string
+                "samples_per_curve": ("INT", {
+                    "default": 50, "min": 10, "max": 200, "step": 10,
+                    "tooltip": "Number of points per curve (higher = smoother but slower)"
+                }),
+                "antialiasing": (["none", "2x", "4x"], {
+                    "tooltip": "Supersampling antialiasing (2x/4x = better quality but slower)"
+                }),
             }
         }
 
@@ -120,19 +252,44 @@ class AdvancedLineLinkRendererNode:
     def __init__(self):
         self.gpu = get_gpu_accelerator()
         np.random.seed(42)
+        
+        # Initialize GPU graph builder
+        self.gpu_graph_builder = None
+        if GPU_GRAPH_AVAILABLE:
+            try:
+                self.gpu_graph_builder = GPUGraphBuilder()
+                print("[YS-LINE] GPU graph builder initialized (FAISS-GPU available)")
+            except Exception as e:
+                print(f"[YS-LINE] GPU graph builder init failed: {e}")
+                self.gpu_graph_builder = None
+        else:
+            print("[YS-LINE] GPU graph builder not available, using CPU fallback")
+        
+        # Initialize GPU curve batch generator
+        self.gpu_curve_gen = None
+        if CUPY_AVAILABLE:
+            try:
+                # Will be created with proper samples_per_curve in _render_single_frame
+                print("[YS-LINE] GPU curve generation available (CuPy detected)")
+            except Exception as e:
+                print(f"[YS-LINE] GPU curve init check failed: {e}")
+        else:
+            print("[YS-LINE] GPU curve generation not available, using CPU fallback")
 
     def execute(self, tracks, image_width, image_height, curve_type,
-                line_style, width_px, opacity, use_gpu, **kwargs):
+                line_style, width_px, opacity, color, use_gpu, **kwargs):
         """
         Render advanced lines with experimental curves.
 
         Args:
-            preset: Preset configuration to use. If not "custom", applies preset settings
-                    before using other parameters (user can still override)
+            color: COLOR input (hex string like "#ffffff" or named color like "red")
+                   Automatically parsed by normalize_color_to_rgba01()
+            **kwargs: Optional parameters including 'alpha' for transparency
         """
 
         # DEBUG
         print(f"\n[YS-LINE] Executing LineLinkRenderer")
+        print(f"[YS-LINE] color input: {color} (type: {type(color)})")
         print(f"[YS-LINE] tracks type: {type(tracks)}")
         
         # Check if batch mode (list of track arrays)
@@ -144,7 +301,7 @@ class AdvancedLineLinkRendererNode:
                 # Process single frame
                 layer = self._render_single_frame(
                     frame_tracks, image_width, image_height, curve_type,
-                    line_style, width_px, opacity, use_gpu, **kwargs
+                    line_style, width_px, opacity, color, use_gpu, **kwargs
                 )
                 batch_layers.append(layer)
                 print(f"[YS-LINE] Frame {i}: {len(frame_tracks)} tracks")
@@ -160,13 +317,29 @@ class AdvancedLineLinkRendererNode:
         print(f"[YS-LINE] SINGLE MODE")
         layer = self._render_single_frame(
             tracks, image_width, image_height, curve_type,
-            line_style, width_px, opacity, use_gpu, **kwargs
+            line_style, width_px, opacity, color, use_gpu, **kwargs
         )
         return (numpy_to_comfyui(layer),)
 
     def _render_single_frame(self, tracks, image_width, image_height, curve_type,
-                            line_style, width_px, opacity, use_gpu, **kwargs):
-        """Render single frame - extracted to avoid duplication"""
+                            line_style, width_px, opacity, color, use_gpu, **kwargs):
+        """Render single frame - extracted to avoid duplication
+
+        Args:
+            color: COLOR input (hex/named color) passed from execute()
+            **kwargs: Optional parameters including 'alpha' override
+        """
+
+        # Parse color using centralized utility
+        # Alpha from optional parameter, defaults to opacity if not provided
+        alpha = kwargs.get('alpha', opacity)
+        rgba = normalize_color_to_rgba01(color, alpha)
+        color_rgb = np.array(rgba[:3])  # Extract RGB as numpy array for rendering functions
+
+        print(f"[YS-LINE] Parsed color: {color} -> RGBA: {rgba}")
+
+        # Add parsed color to kwargs for downstream methods
+        kwargs['color_rgb'] = color_rgb
 
         # Convert tracks to numpy array
         if not isinstance(tracks, np.ndarray):
@@ -189,27 +362,65 @@ class AdvancedLineLinkRendererNode:
             layer = create_rgba_layer(image_height, image_width)
             tracks_scaled = tracks
 
-        # Initialize curve generator
-        curve_gen = CurveGenerator(samples_per_curve=kwargs.get('samples_per_curve', 50))
-
         # Build graph connections
-        edges = self._build_graph(tracks_scaled, curve_type, **kwargs)
+        edges = self._build_graph(tracks_scaled, curve_type, use_gpu, **kwargs)
+        
+        if len(edges) == 0:
+            return layer
 
-        # Render each edge with specified curve type
-        for i, (start_idx, end_idx) in enumerate(edges):
-            p1 = tracks_scaled[start_idx]
-            p2 = tracks_scaled[end_idx]
+        # Try GPU batch curve generation first
+        samples_per_curve = kwargs.get('samples_per_curve', 50)
+        gpu_curves_generated = False
+        
+        # Check if curve type supports GPU batch generation
+        gpu_supported_curves = [
+            'straight', 'quadratic_bezier', 'cubic_bezier', 'catmull_rom',
+            'logarithmic_spiral', 'elastic', 'gravitational'
+        ]
+        
+        if use_gpu and CUPY_AVAILABLE and curve_type in gpu_supported_curves:
+            try:
+                # Generate ALL curves on GPU in one batch
+                all_curves = self._generate_curves_batch_gpu(
+                    tracks_scaled, edges, curve_type, **kwargs
+                )
+                gpu_curves_generated = True
+                
+                # Render each curve (rendering still on CPU for now)
+                for i, curve_points in enumerate(all_curves):
+                    start_idx, end_idx = edges[i]
+                    color = self._get_edge_color(i, start_idx, end_idx, **kwargs)
+                    self._render_line_styled(layer, curve_points, color,
+                                           line_style, width_px * aa_factor,
+                                           opacity, **kwargs)
+                
+            except Exception as e:
+                error_msg = str(e)
+                if "cl.exe" in error_msg or "nvcc" in error_msg:
+                    print(f"[YS-LINE] GPU compilation unavailable (missing MSVC compiler), using CPU fallback")
+                else:
+                    print(f"[YS-LINE] GPU batch curve generation failed: {e}")
+                print(f"[YS-LINE] Falling back to CPU curve generation")
+                gpu_curves_generated = False
+        
+        # CPU fallback: loop-based generation
+        if not gpu_curves_generated:
+            curve_gen = CurveGenerator(samples_per_curve=samples_per_curve)
+            
+            for i, (start_idx, end_idx) in enumerate(edges):
+                p1 = tracks_scaled[start_idx]
+                p2 = tracks_scaled[end_idx]
 
-            # Generate curve points
-            curve_points = self._generate_curve(curve_gen, p1, p2, curve_type, **kwargs)
+                # Generate curve points
+                curve_points = self._generate_curve(curve_gen, p1, p2, curve_type, **kwargs)
 
-            # Determine color
-            color = self._get_edge_color(i, start_idx, end_idx, **kwargs)
+                # Determine color
+                color = self._get_edge_color(i, start_idx, end_idx, **kwargs)
 
-            # Render with specified style
-            self._render_line_styled(layer, curve_points, color,
-                                    line_style, width_px * aa_factor,
-                                    opacity, **kwargs)
+                # Render with specified style
+                self._render_line_styled(layer, curve_points, color,
+                                       line_style, width_px * aa_factor,
+                                       opacity, **kwargs)
 
         # Downscale if antialiasing was used
         if aa_factor > 1:
@@ -226,11 +437,20 @@ class AdvancedLineLinkRendererNode:
             return 4
         return 1
 
-    def _build_graph(self, tracks: np.ndarray, curve_type: str, **kwargs) -> List[Tuple[int, int]]:
-        """Build graph connections with various strategies"""
+    def _build_graph(self, tracks: np.ndarray, curve_type: str, use_gpu: bool = True, **kwargs) -> List[Tuple[int, int]]:
+        """Build graph connections with various strategies (GPU-accelerated when available)"""
 
         # For graph-based curve types, use their inherent structure
         if curve_type in ['delaunay', 'voronoi_edges', 'minimum_spanning']:
+            # Inform user if graph_mode was specified but will be ignored
+            if 'graph_mode' in kwargs:
+                graph_names = {
+                    'delaunay': 'Delaunay triangulation',
+                    'voronoi_edges': 'Voronoi diagram',
+                    'minimum_spanning': 'Minimum Spanning Tree'
+                }
+                print(f"[YS-LINE] Note: curve_type='{curve_type}' uses {graph_names.get(curve_type, 'built-in')} graph (graph_mode parameter not used)")
+            
             if curve_type == 'delaunay':
                 return GraphBuilder.build_delaunay_graph(tracks)
             elif curve_type == 'voronoi_edges':
@@ -241,11 +461,62 @@ class AdvancedLineLinkRendererNode:
         # Otherwise use specified graph mode
         mode = kwargs.get('graph_mode', 'knn')
 
+        # GPU-accelerated kNN path
         if mode == 'knn':
             k = kwargs.get('k_neighbors', 3)
-            return GraphBuilder.build_knn_graph(tracks, k)
+            delta_y_max = kwargs.get('delta_y_max', 0.0)
+            degree_cap = kwargs.get('degree_cap', 0)
+            hysteresis_alpha = kwargs.get('hysteresis_alpha', 0.0)
+            
+            # Warn if GPU-specific params are used but GPU unavailable
+            gpu_params_used = delta_y_max > 0 or degree_cap > 0 or hysteresis_alpha > 0
+            if gpu_params_used and (not use_gpu or self.gpu_graph_builder is None):
+                ignored_params = []
+                if delta_y_max > 0:
+                    ignored_params.append(f"delta_y_max={delta_y_max}")
+                if degree_cap > 0:
+                    ignored_params.append(f"degree_cap={degree_cap}")
+                if hysteresis_alpha > 0:
+                    ignored_params.append(f"hysteresis_alpha={hysteresis_alpha}")
+                
+                reason = "GPU disabled" if not use_gpu else "FAISS-GPU unavailable"
+                print(f"[YS-LINE] Warning: GPU-only params ignored ({reason}): {', '.join(ignored_params)}")
+            
+            # GPU path: FAISS-GPU kNN
+            if use_gpu and self.gpu_graph_builder is not None:
+                try:
+                    start_time = time.perf_counter()
+                    
+                    edges = self.gpu_graph_builder.build_knn_graph_gpu(
+                        tracks,
+                        k=k,
+                        delta_y_max=delta_y_max if delta_y_max > 0 else None,
+                        degree_cap=degree_cap if degree_cap > 0 else None,
+                        hysteresis_alpha=hysteresis_alpha
+                    )
+                    
+                    gpu_time = (time.perf_counter() - start_time) * 1000
+                    print(f"[YS-LINE] GPU graph built: {len(tracks)} points → {len(edges)} edges in {gpu_time:.2f}ms")
+                    
+                    return edges
+                    
+                except Exception as e:
+                    print(f"[YS-LINE] GPU graph building failed: {e}, falling back to CPU")
+            
+            # CPU fallback
+            start_time = time.perf_counter()
+            edges = GraphBuilder.build_knn_graph(tracks, k)
+            cpu_time = (time.perf_counter() - start_time) * 1000
+            print(f"[YS-LINE] CPU graph built: {len(tracks)} points → {len(edges)} edges in {cpu_time:.2f}ms")
+            
+            # Warn if k_neighbors used with non-knn mode was expected but we're in fallback
+            return edges
+            
         elif mode == 'radius':
             radius = kwargs.get('connection_radius', 100.0)
+            # Warn if k_neighbors specified but not used
+            if 'k_neighbors' in kwargs and kwargs['k_neighbors'] != 3:
+                print(f"[YS-LINE] Warning: k_neighbors ignored - graph_mode='radius' uses connection_radius instead")
             return GraphBuilder.build_radius_graph(tracks, radius)
         elif mode == 'delaunay':
             return GraphBuilder.build_delaunay_graph(tracks)
@@ -255,7 +526,8 @@ class AdvancedLineLinkRendererNode:
             return GraphBuilder.build_voronoi_graph(tracks)
         else:
             # Default to kNN
-            return GraphBuilder.build_knn_graph(tracks, 3)
+            k = kwargs.get('k_neighbors', 3)
+            return GraphBuilder.build_knn_graph(tracks, k)
 
     def _generate_curve(self, curve_gen: CurveGenerator, p1: np.ndarray,
                        p2: np.ndarray, curve_type: str, **kwargs) -> np.ndarray:
@@ -300,21 +572,91 @@ class AdvancedLineLinkRendererNode:
             # Default to straight line
             return curve_gen.generate_straight(p1, p2)
 
+    def _generate_curves_batch_gpu(self, tracks: np.ndarray, edges: List[Tuple[int, int]],
+                                   curve_type: str, **kwargs) -> List[np.ndarray]:
+        """
+        Generate ALL curves in batch on GPU (massive speedup!)
+
+        Args:
+            tracks: All track points (N_points, 2)
+            edges: List of (start_idx, end_idx) tuples
+            curve_type: Type of curve to generate
+            **kwargs: Curve-specific parameters (including samples_per_curve)
+
+        Returns:
+            List of curve point arrays (each is (samples, 2))
+        """
+        if not CUPY_AVAILABLE or cp is None:
+            raise RuntimeError("CuPy not available for GPU curve generation")
+
+        # Extract samples_per_curve from kwargs
+        samples_per_curve = kwargs.get('samples_per_curve', 100)
+
+        start_time = time.perf_counter()
+        n_edges = len(edges)
+        
+        # Extract start and end points for all edges
+        edges_array = np.array(edges)
+        p1_batch = tracks[edges_array[:, 0]]  # (N_edges, 2)
+        p2_batch = tracks[edges_array[:, 1]]  # (N_edges, 2)
+        
+        # Transfer to GPU
+        p1_gpu = cp.asarray(p1_batch, dtype=cp.float32)
+        p2_gpu = cp.asarray(p2_batch, dtype=cp.float32)
+        
+        # Create GPU batch generator
+        gpu_gen = GPUCurveBatchGenerator(samples_per_curve=samples_per_curve)
+        
+        # Generate curves based on type
+        if curve_type == "straight":
+            curves_gpu = gpu_gen.generate_straight_batch(p1_gpu, p2_gpu)
+        
+        elif curve_type == "quadratic_bezier":
+            overshoot = kwargs.get('overshoot', 0.0)
+            curves_gpu = gpu_gen.generate_quadratic_bezier_batch(p1_gpu, p2_gpu, overshoot)
+        
+        elif curve_type == "cubic_bezier":
+            overshoot = kwargs.get('overshoot', 0.0)
+            control_offset = kwargs.get('control_point_offset', 0.3)
+            curves_gpu = gpu_gen.generate_cubic_bezier_batch(p1_gpu, p2_gpu, overshoot, control_offset)
+        
+        elif curve_type == "catmull_rom":
+            tension = kwargs.get('curve_tension', 0.5)
+            curves_gpu = gpu_gen.generate_catmull_rom_batch(p1_gpu, p2_gpu, tension)
+        
+        elif curve_type == "logarithmic_spiral":
+            turns = kwargs.get('spiral_turns', 0.5)
+            curves_gpu = gpu_gen.generate_logarithmic_spiral_batch(p1_gpu, p2_gpu, turns)
+        
+        elif curve_type == "elastic":
+            stiffness = kwargs.get('elastic_stiffness', 0.5)
+            curves_gpu = gpu_gen.generate_elastic_batch(p1_gpu, p2_gpu, stiffness)
+        
+        elif curve_type == "gravitational":
+            gravity = kwargs.get('gravity_strength', 0.1)
+            curves_gpu = gpu_gen.generate_gravitational_batch(p1_gpu, p2_gpu, gravity)
+        
+        else:
+            # Fallback to straight
+            curves_gpu = gpu_gen.generate_straight_batch(p1_gpu, p2_gpu)
+        
+        # Transfer back to CPU
+        curves_cpu = cp.asnumpy(curves_gpu)  # (N_edges, samples, 2)
+        
+        gpu_time = (time.perf_counter() - start_time) * 1000
+        print(f"[YS-LINE] GPU generated {n_edges} {curve_type} curves in {gpu_time:.2f}ms ({gpu_time/n_edges:.3f}ms per curve)")
+        
+        # Convert to list of individual curve arrays
+        curves_list = [curves_cpu[i] for i in range(n_edges)]
+        return curves_list
+
     def _get_edge_color(self, edge_index: int, start_idx: int,
                        end_idx: int, **kwargs) -> np.ndarray:
         """Determine edge color"""
 
-        # Parse fixed color from string
-        color_str = kwargs.get('fixed_color', '1.0,1.0,1.0')
-        try:
-            color_parts = [float(x.strip()) for x in color_str.split(',')]
-            if len(color_parts) >= 3:
-                return np.array(color_parts[:3])
-        except:
-            pass
-
-        # Default white
-        return np.array([1.0, 1.0, 1.0])
+        # Use parsed color_rgb from kwargs (set in _render_single_frame)
+        color_rgb = kwargs.get('color_rgb', np.array([1.0, 1.0, 1.0]))
+        return color_rgb
 
     def _render_line_styled(self, layer: np.ndarray, points: np.ndarray,
                            color: np.ndarray, style: str, width: float,
@@ -340,17 +682,22 @@ class AdvancedLineLinkRendererNode:
             self._render_dash_dot_line(layer, points, color, width, opacity, dash_length)
 
         elif style == "gradient_fade":
-            start_color_str = kwargs.get('gradient_start_color', '1.0,1.0,1.0')
-            end_color_str = kwargs.get('gradient_end_color', '0.0,0.5,1.0')
+            # Parse gradient colors using centralized utility
+            gradient_alpha = kwargs.get('gradient_alpha', opacity)
+            start_rgba = normalize_color_to_rgba01(
+                kwargs.get('gradient_start_color', '#ffffff'),
+                gradient_alpha
+            )
+            end_rgba = normalize_color_to_rgba01(
+                kwargs.get('gradient_end_color', '#000000'),
+                gradient_alpha
+            )
+            start_color = start_rgba[:3]
+            end_color = end_rgba[:3]
 
-            try:
-                start_color = np.array([float(x.strip()) for x in start_color_str.split(',')])[:3]
-                end_color = np.array([float(x.strip()) for x in end_color_str.split(',')])[:3]
-            except:
-                start_color = color
-                end_color = color
+            print(f"[YS-LINE] Parsed gradient: {kwargs.get('gradient_start_color')} -> {start_rgba}, {kwargs.get('gradient_end_color')} -> {end_rgba}")
 
-            self._render_gradient_line(layer, points, start_color, end_color, width, opacity)
+            self._render_gradient_line(layer, points, start_color, end_color, width, gradient_alpha)
 
         elif style == "pulsing":
             time = kwargs.get('time', 0.0)

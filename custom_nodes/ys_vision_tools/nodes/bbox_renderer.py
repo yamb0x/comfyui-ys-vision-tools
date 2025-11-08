@@ -4,6 +4,13 @@ Bounding Box Renderer Node - Phase 2
 Renders bounding boxes around tracked points with multiple sizing modes.
 Supports fixed sizes, radius-based, and age-based dynamic sizing.
 
+🎨 COLOR PICKER SUPPORT:
+- Visual color picker UI (click the color swatch in ComfyUI)
+- Supports HEX colors: "#ffffff", "#ff0000", "#00ff00"
+- Supports named colors: "red", "orange", "cyan", "white"
+- Backward compatible with legacy float lists: [1.0, 0.5, 0.0]
+- Separate alpha slider for transparency control
+
 Author: Yambo Studio
 Part of: YS-vision-tools Phase 2 (Extended Renderers)
 """
@@ -16,7 +23,8 @@ from typing import Dict, Any, List, Tuple
 from ..utils import (
     create_rgba_layer,
     numpy_to_comfyui,
-    is_gpu_available
+    is_gpu_available,
+    normalize_color_to_rgba01
 )
 
 # Import GPU renderer with fallback
@@ -73,6 +81,10 @@ class BoundingBoxRendererNode:
                     "step": 0.05,
                     "tooltip": "Corner roundness (0=square, 1=circular)"
                 }),
+                "color": ("COLOR", {
+                    "default": "#ffffff",
+                    "tooltip": "Click the color swatch to open the visual color picker"
+                }),
             },
             "optional": {
                 "tracks": ("TRACKS",),
@@ -85,8 +97,14 @@ class BoundingBoxRendererNode:
                 "height": ("INT", {"default": 20, "min": 5, "max": 200, "step": 1}),
                 "radius_px": ("FLOAT", {"default": 10.0, "min": 5.0, "max": 100.0, "step": 1.0}),
 
-                # Color
-                "color": ("STRING", {"default": "1.0,1.0,1.0"}),  # RGB string
+                # Alpha slider
+                "alpha": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "tooltip": "Transparency level (0=invisible, 1=opaque)"
+                }),
 
                 # GPU acceleration
                 "use_gpu": ("BOOLEAN", {
@@ -111,9 +129,14 @@ class BoundingBoxRendererNode:
                 self.gpu_renderer = None
 
     def execute(self, image_width, image_height, box_mode,
-                stroke_px, fill_opacity, roundness, **kwargs):
+                stroke_px, fill_opacity, roundness, color, **kwargs):
         """
         Render bounding boxes to RGBA layer.
+
+        Args:
+            color: COLOR input (hex string like "#ffffff" or named color like "red")
+                   Automatically parsed by normalize_color_to_rgba01()
+            **kwargs: Optional parameters including 'alpha' for transparency
 
         Returns:
             LAYER: RGBA layer with rendered boxes
@@ -121,21 +144,22 @@ class BoundingBoxRendererNode:
 
         # DEBUG
         print(f"\n[YS-BBOX] Executing BBoxRenderer")
+        print(f"[YS-BBOX] color input: {color} (type: {type(color)})")
         tracks = kwargs.get('tracks', np.array([]))
         print(f"[YS-BBOX] tracks type: {type(tracks)}")
-        
+
         # Check if batch mode (list of track arrays)
         if isinstance(tracks, list):
             print(f"[YS-BBOX] BATCH MODE: {len(tracks)} frames")
             batch_layers = []
-            
+
             for i, frame_tracks in enumerate(tracks):
                 # Process single frame
                 frame_kwargs = kwargs.copy()
                 frame_kwargs['tracks'] = frame_tracks
                 layer = self._render_single_frame(
                     image_width, image_height, box_mode,
-                    stroke_px, fill_opacity, roundness, **frame_kwargs
+                    stroke_px, fill_opacity, roundness, color, **frame_kwargs
                 )
                 print(f"[YS-BBOX] Frame {i} layer shape before append: {layer.shape}")
                 batch_layers.append(layer)
@@ -152,19 +176,34 @@ class BoundingBoxRendererNode:
         print(f"[YS-BBOX] SINGLE MODE")
         layer = self._render_single_frame(
             image_width, image_height, box_mode,
-            stroke_px, fill_opacity, roundness, **kwargs
+            stroke_px, fill_opacity, roundness, color, **kwargs
         )
         return (numpy_to_comfyui(layer),)
 
     def _render_single_frame(self, image_width, image_height, box_mode,
-                             stroke_px, fill_opacity, roundness, **kwargs):
-        """Render single frame with GPU/CPU path selection"""
+                             stroke_px, fill_opacity, roundness, color, **kwargs):
+        """Render single frame with GPU/CPU path selection
+
+        Args:
+            color: COLOR input (hex/named color) passed from execute()
+            **kwargs: Optional parameters including 'alpha' override
+        """
 
         # Get use_gpu parameter
         use_gpu = kwargs.get('use_gpu', True)
 
-        # Compute box positions and sizes
-        boxes = self._compute_boxes(box_mode, **kwargs)
+        # Parse color using centralized utility
+        # Alpha from optional parameter, defaults to 1.0 if not provided
+        alpha = kwargs.get('alpha', 1.0)
+        rgba = normalize_color_to_rgba01(color, alpha)
+        color_rgb = rgba[:3]  # Extract RGB for rendering functions
+
+        print(f"[YS-BBOX] Parsed color: {color} -> RGBA: {rgba}")
+
+        # Compute box positions and sizes (pass parsed color)
+        kwargs_with_color = kwargs.copy()
+        kwargs_with_color['color_rgb'] = color_rgb
+        boxes = self._compute_boxes(box_mode, **kwargs_with_color)
 
         if len(boxes) == 0:
             # Return empty layer
@@ -247,7 +286,7 @@ class BoundingBoxRendererNode:
 
             width = kwargs.get('width', 20)
             height = kwargs.get('height', 20)
-            color = self._parse_color(kwargs.get('color', '1.0,1.0,1.0'))
+            color_rgb = kwargs.get('color_rgb', np.array([1.0, 1.0, 1.0]))
 
             boxes = []
             for x, y in tracks:
@@ -255,7 +294,7 @@ class BoundingBoxRendererNode:
                 boxes.append([
                     x - width / 2, y - height / 2,
                     width, height,
-                    *color
+                    *color_rgb
                 ])
             return boxes
 
@@ -268,7 +307,7 @@ class BoundingBoxRendererNode:
                 return []
 
             radius = kwargs.get('radius_px', 10.0)
-            color = self._parse_color(kwargs.get('color', '1.0,1.0,1.0'))
+            color_rgb = kwargs.get('color_rgb', np.array([1.0, 1.0, 1.0]))
 
             boxes = []
             for x, y in tracks:
@@ -277,7 +316,7 @@ class BoundingBoxRendererNode:
                 boxes.append([
                     x - radius, y - radius,
                     size, size,
-                    *color
+                    *color_rgb
                 ])
             return boxes
 
@@ -294,7 +333,7 @@ class BoundingBoxRendererNode:
                 ages = np.array(ages)
 
             base_size = kwargs.get('radius_px', 10.0)
-            color = self._parse_color(kwargs.get('color', '1.0,1.0,1.0'))
+            color_rgb = kwargs.get('color_rgb', np.array([1.0, 1.0, 1.0]))
 
             boxes = []
             for (x, y), age in zip(tracks, ages):
@@ -306,7 +345,7 @@ class BoundingBoxRendererNode:
                 boxes.append([
                     x - size / 2, y - size / 2,
                     size, size,
-                    *color
+                    *color_rgb
                 ])
             return boxes
 
@@ -460,13 +499,6 @@ class BoundingBoxRendererNode:
         alpha = temp[:, :, 3:4]
         layer[:, :, :3] = layer[:, :, :3] * (1 - alpha) + temp[:, :, :3] * alpha
         layer[:, :, 3] = np.maximum(layer[:, :, 3], temp[:, :, 3])
-
-    def _parse_color(self, color_str: str) -> np.ndarray:
-        """Parse color string to RGB array."""
-        try:
-            return np.array([float(x.strip()) for x in color_str.split(',')])[:3]
-        except:
-            return np.array([1.0, 1.0, 1.0])
 
 
 # Node registration

@@ -23,6 +23,16 @@ class CompositeOverNode:
             "required": {
                 "base_image": ("IMAGE",),
                 "layer": ("LAYER",),
+                "blend_mode": ([
+                    "normal",
+                    "add",
+                    "multiply",
+                    "screen",
+                    "overlay",
+                    "difference",
+                    "max",
+                    "min",
+                ],),
                 "opacity": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
             },
             "optional": {
@@ -36,51 +46,52 @@ class CompositeOverNode:
     FUNCTION = "execute"
     CATEGORY = "YS-vision-tools/Compositing"
 
-    def execute(self, base_image, layer, opacity, **kwargs):
+    def execute(self, base_image, layer, blend_mode, opacity, **kwargs):
         """Composite layer over base image"""
 
         # DEBUG
         print(f"\n[YS-COMPOSITE] Executing CompositeOver")
         print(f"[YS-COMPOSITE] base_image type: {type(base_image)}, shape: {base_image.shape if hasattr(base_image, 'shape') else 'N/A'}")
         print(f"[YS-COMPOSITE] layer type: {type(layer)}, shape: {layer.shape if hasattr(layer, 'shape') else 'N/A'}")
-        
+        print(f"[YS-COMPOSITE] blend_mode: {blend_mode}")
+
         # Check if batch mode
         import torch
         is_batch = False
         batch_size = 1
-        
+
         if torch.is_tensor(base_image) and len(base_image.shape) == 4 and base_image.shape[0] > 1:
             is_batch = True
             batch_size = base_image.shape[0]
         elif torch.is_tensor(layer) and len(layer.shape) == 4 and layer.shape[0] > 1:
             is_batch = True
             batch_size = layer.shape[0]
-            
+
         if is_batch:
             print(f"[YS-COMPOSITE] BATCH MODE: {batch_size} frames")
             batch_results = []
-            
+
             for i in range(batch_size):
                 # Get frame data
                 frame_base = base_image[i:i+1] if torch.is_tensor(base_image) and base_image.shape[0] > 1 else base_image
                 frame_layer = layer[i:i+1] if torch.is_tensor(layer) and layer.shape[0] > 1 else layer
-                
+
                 # Process single frame
-                result = self._composite_single_frame(frame_base, frame_layer, opacity, **kwargs)
+                result = self._composite_single_frame(frame_base, frame_layer, blend_mode, opacity, **kwargs)
                 batch_results.append(result)
                 print(f"[YS-COMPOSITE] Frame {i}: composited")
-            
+
             # Stack into batch
             batch_result = np.stack(batch_results, axis=0)
             print(f"[YS-COMPOSITE] Returning batch: {batch_result.shape}")
             return (torch.from_numpy(batch_result.astype(np.float32)),)
-        
+
         # Single frame mode
         print(f"[YS-COMPOSITE] SINGLE MODE")
-        result = self._composite_single_frame(base_image, layer, opacity, **kwargs)
+        result = self._composite_single_frame(base_image, layer, blend_mode, opacity, **kwargs)
         return (numpy_to_comfyui(result),)
 
-    def _composite_single_frame(self, base_image, layer, opacity, **kwargs):
+    def _composite_single_frame(self, base_image, layer, blend_mode, opacity, **kwargs):
         """Composite single frame - extracted to avoid duplication"""
 
         # Convert to numpy arrays and ensure proper format
@@ -139,14 +150,97 @@ class CompositeOverNode:
             np.ones((*base.shape[:2], 1), dtype=base.dtype)
         ], axis=-1)
 
-        # Composite
-        result = alpha_blend(overlay, base_rgba)
+        # Apply blend mode
+        if blend_mode == "normal":
+            result = alpha_blend(overlay, base_rgba)
+        elif blend_mode == "add":
+            result = self._blend_add(base_rgba, overlay)
+        elif blend_mode == "multiply":
+            result = self._blend_multiply(base_rgba, overlay)
+        elif blend_mode == "screen":
+            result = self._blend_screen(base_rgba, overlay)
+        elif blend_mode == "overlay":
+            result = self._blend_overlay(base_rgba, overlay)
+        elif blend_mode == "difference":
+            result = self._blend_difference(base_rgba, overlay)
+        elif blend_mode == "max":
+            result = self._blend_max(base_rgba, overlay)
+        elif blend_mode == "min":
+            result = self._blend_min(base_rgba, overlay)
+        else:
+            result = alpha_blend(overlay, base_rgba)
 
         # Remove alpha channel for output and ensure valid range
         result_rgb = np.clip(result[:, :, :3], 0.0, 1.0).astype(np.float32)
 
         # Return RGB for single frame
         return result_rgb
+
+    def _blend_add(self, base: np.ndarray, top: np.ndarray) -> np.ndarray:
+        """Additive blending"""
+        result = base.copy()
+        alpha = top[:, :, 3:4]
+
+        result[:, :, :3] = np.clip(base[:, :, :3] + top[:, :, :3] * alpha, 0, 1)
+        result[:, :, 3:4] = np.clip(base[:, :, 3:4] + top[:, :, 3:4], 0, 1)
+
+        return result
+
+    def _blend_multiply(self, base: np.ndarray, top: np.ndarray) -> np.ndarray:
+        """Multiply blending"""
+        result = base.copy()
+        alpha = top[:, :, 3:4]
+
+        blended = base[:, :, :3] * top[:, :, :3]
+        result[:, :, :3] = base[:, :, :3] * (1 - alpha) + blended * alpha
+        result[:, :, 3:4] = np.clip(base[:, :, 3:4] + top[:, :, 3:4] * (1 - base[:, :, 3:4]), 0, 1)
+
+        return result
+
+    def _blend_screen(self, base: np.ndarray, top: np.ndarray) -> np.ndarray:
+        """Screen blending"""
+        result = base.copy()
+        alpha = top[:, :, 3:4]
+
+        blended = 1 - (1 - base[:, :, :3]) * (1 - top[:, :, :3])
+        result[:, :, :3] = base[:, :, :3] * (1 - alpha) + blended * alpha
+        result[:, :, 3:4] = np.clip(base[:, :, 3:4] + top[:, :, 3:4] * (1 - base[:, :, 3:4]), 0, 1)
+
+        return result
+
+    def _blend_overlay(self, base: np.ndarray, top: np.ndarray) -> np.ndarray:
+        """Overlay blending"""
+        result = base.copy()
+        alpha = top[:, :, 3:4]
+
+        mask = base[:, :, :3] < 0.5
+        blended = np.where(mask,
+                          2 * base[:, :, :3] * top[:, :, :3],
+                          1 - 2 * (1 - base[:, :, :3]) * (1 - top[:, :, :3]))
+
+        result[:, :, :3] = base[:, :, :3] * (1 - alpha) + blended * alpha
+        result[:, :, 3:4] = np.clip(base[:, :, 3:4] + top[:, :, 3:4] * (1 - base[:, :, 3:4]), 0, 1)
+
+        return result
+
+    def _blend_difference(self, base: np.ndarray, top: np.ndarray) -> np.ndarray:
+        """Difference blending (absolute difference)"""
+        result = base.copy()
+        alpha = top[:, :, 3:4]
+
+        blended = np.abs(base[:, :, :3] - top[:, :, :3])
+        result[:, :, :3] = base[:, :, :3] * (1 - alpha) + blended * alpha
+        result[:, :, 3:4] = np.clip(base[:, :, 3:4] + top[:, :, 3:4] * (1 - base[:, :, 3:4]), 0, 1)
+
+        return result
+
+    def _blend_max(self, base: np.ndarray, top: np.ndarray) -> np.ndarray:
+        """Maximum blending"""
+        return np.maximum(base, top)
+
+    def _blend_min(self, base: np.ndarray, top: np.ndarray) -> np.ndarray:
+        """Minimum blending"""
+        return np.minimum(base, top)
 
     def _apply_offset(self, layer: np.ndarray, x_offset: int, y_offset: int) -> np.ndarray:
         """Apply position offset to layer"""

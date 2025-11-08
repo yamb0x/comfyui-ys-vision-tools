@@ -1,6 +1,13 @@
 """
 Physics Line Renderer Node for YS-vision-tools
 Specialized node for physics-simulated line connections
+
+🎨 COLOR PICKER SUPPORT:
+- Visual color picker UI (click the color swatch in ComfyUI)
+- Supports HEX colors: "#ffffff", "#ff0000", "#00ff00"
+- Supports named colors: "red", "orange", "cyan", "white"
+- Backward compatible with legacy float lists: [1.0, 0.5, 0.0]
+- Separate alpha slider for transparency control
 """
 
 import numpy as np
@@ -48,9 +55,19 @@ class PhysicsLineRendererNode:
                     "step": 1,
                     "tooltip": "Number of connections per point"
                 }),
+                "color": ("COLOR", {
+                    "default": "#4db3ff",
+                    "tooltip": "Click the color swatch to open the visual color picker (default: electric blue)"
+                }),
             },
             "optional": {
-                "color": ("STRING", {"default": "0.3,0.7,1.0"}),  # Electric blue default
+                "alpha": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "tooltip": "Transparency level (0=invisible, 1=opaque)"
+                }),
                 "intensity": ("FLOAT", {
                     "default": 1.0,
                     "min": 0.0,
@@ -77,8 +94,13 @@ class PhysicsLineRendererNode:
         self.advanced_node = AdvancedLineLinkRendererNode()
 
     def execute(self, tracks, image_width, image_height, physics_type, effect_style,
-                line_thickness, opacity, connections, **kwargs):
-        """Render physics-simulated lines"""
+                line_thickness, opacity, connections, color, **kwargs):
+        """Render physics-simulated lines
+        
+        Args:
+            color: COLOR input (hex/named color)
+            **kwargs: Optional parameters including 'alpha'
+        """
 
         # Map effect_style names
         style_map = {
@@ -120,9 +142,10 @@ class PhysicsLineRendererNode:
             "k_neighbors": connections,
             "antialiasing": "2x",
             "samples_per_curve": 60,
-            "fixed_color": kwargs.get('color', '0.3,0.7,1.0'),
+            "color": color,  # Pass COLOR input to advanced node
             "time": kwargs.get('animation_time', 0.0),
-            **physics_params
+            **physics_params,
+            **kwargs
         }
 
         # Add pulse frequency for pulsing style

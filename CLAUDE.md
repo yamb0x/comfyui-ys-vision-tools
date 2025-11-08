@@ -53,13 +53,181 @@ F:\Comfy3D_WinPortable\ComfyUI\custom_nodes\ys_vision_tools\
 
 ---
 
+## 🔴 CRITICAL RULES - NEVER SKIP
+
+### 1. ALWAYS Verify Code Changes Before Asking User to Test
+
+**MANDATORY VERIFICATION BEFORE USER TESTING**:
+```bash
+# Before saying "copy this file and test":
+grep -n "NEW_FEATURE_MARKER" "D:\path\to\file.py"  # Verify new code exists
+wc -l "D:\path\to\file.py"                        # Check line count changed
+```
+
+**Why This Matters**:
+- Edit tool can fail silently
+- Asking user to test non-existent code wastes their time
+- ALWAYS verify the actual code changes were written to D: drive
+
+**DON'T**:
+- ❌ Assume Edit tool worked without verification
+- ❌ Ask user to test without checking file contents
+- ❌ Trust tool output without grep/Read verification
+
+**DO**:
+- ✅ Use grep to confirm new code exists in file
+- ✅ Check line count increased/changed as expected
+- ✅ Read the actual section to verify changes
+- ✅ Only then ask user to copy and test
+
+### 2. GPU-First Architecture - ALWAYS
+
+**MANDATORY for ALL new nodes and operations**:
+
+Every computational operation MUST have GPU acceleration:
+- Image processing → CuPy
+- Distance calculations → GPU vectorized operations
+- Mathematical operations → GPU arrays
+- Filters/convolutions → cupyx.scipy
+
+**Standard Pattern** (from blur_region_renderer.py):
+```python
+def process(data, use_gpu=True):
+    """ALWAYS provide use_gpu parameter (default True)"""
+
+    if use_gpu and CUPY_AVAILABLE:
+        start_time = time.perf_counter()
+
+        # Transfer to GPU
+        data_gpu = cp.asarray(data)
+
+        # Process on GPU
+        result_gpu = gpu_operation(data_gpu)
+
+        # Transfer back
+        result = cp.asnumpy(result_gpu)
+
+        print(f"[YS-NODE] GPU operation in {(time.perf_counter()-start_time)*1000:.2f}ms")
+        return result
+    else:
+        # CPU fallback with timing
+        if use_gpu and not CUPY_AVAILABLE:
+            print("[YS-NODE] GPU requested but CuPy unavailable, using CPU")
+
+        start_time = time.perf_counter()
+        result = cpu_operation(data)
+        print(f"[YS-NODE] CPU operation in {(time.perf_counter()-start_time)*1000:.2f}ms")
+        return result
+```
+
+**Every operation MUST have**:
+- ✅ `use_gpu` parameter (default True)
+- ✅ GPU path with CuPy when available
+- ✅ CPU fallback path
+- ✅ Performance logging for BOTH paths
+- ✅ Automatic CUPY_AVAILABLE detection
+
+**Reference Implementations**:
+- `blur_region_renderer.py` - GPU mask creation + GPU blur
+- `bbox_renderer.py` - GPU SDF rendering with CUDA kernels
+- `track_detect.py` - GPU gradient computation
+- `line_link_renderer.py` - GPU graph building with FAISS-GPU
+
+**Never write CPU-only code** - if you can't GPU accelerate immediately, document it as technical debt.
+
+### 3. CRITICAL: Batch Processing for Video - ALWAYS
+
+**MANDATORY for ALL nodes that process LAYER or IMAGE tensors**:
+
+ComfyUI passes video as batched tensors with shape `(B, H, W, C)` where B is the number of frames.
+**EVERY node MUST process ALL frames in the batch**, not just frame 0.
+
+**🔴 CRITICAL BUG PATTERN TO AVOID**:
+```python
+# ❌ WRONG - Only processes first frame!
+def execute(self, layer: torch.Tensor, ...):
+    layer_np = layer[0].cpu().numpy()  # BUG: Only frame 0!
+    result = process(layer_np)
+    return (torch.from_numpy(result).unsqueeze(0),)
+```
+
+**✅ CORRECT PATTERN - Process all frames**:
+```python
+def execute(self, layer: torch.Tensor, ...):
+    # 1. Detect batch size
+    batch_size = layer.shape[0]
+    is_batch = batch_size > 1
+
+    if is_batch:
+        print(f"[YS-NODE] BATCH MODE: {batch_size} frames")
+
+    # 2. Initialize state (OUTSIDE loop for temporal nodes)
+    if state is None:
+        state = self._init_state(...)
+
+    # 3. Process EACH frame
+    output_frames = []
+    for i in range(batch_size):
+        # Get current frame
+        frame_np = layer[i].cpu().numpy()  # Process frame i
+
+        # Process frame (state persists for temporal effects!)
+        result_np, state = self._process(frame_np, state, ...)
+
+        output_frames.append(result_np)
+
+        # Progress logging (every 10 frames)
+        if is_batch and (i % 10 == 0 or i == batch_size - 1):
+            print(f"[YS-NODE] Processed frame {i+1}/{batch_size}")
+
+    # 4. Stack back into batch
+    if is_batch:
+        output_batch = np.stack(output_frames, axis=0)
+        output_tensor = torch.from_numpy(output_batch).float()
+    else:
+        output_tensor = torch.from_numpy(output_frames[0]).unsqueeze(0).float()
+
+    return (output_tensor, state)
+```
+
+**Key Rules**:
+- ✅ **ALWAYS** loop through `range(batch_size)`, not just `[0]`
+- ✅ **State persists** across frames (critical for temporal effects like Echo, trails, accumulation)
+- ✅ **Stack output** with `np.stack(output_frames, axis=0)` to match input batch size
+- ✅ **Log progress** every 10 frames to avoid console spam
+- ✅ **Test with video** (50+ frames) not just single images
+
+**Nodes That MUST Use Batch Processing**:
+- ✅ **EchoLayer** - Temporal accumulation across frames
+- ✅ **PixelSorting** - Per-frame sorting with animation
+- ✅ **TextOnTracks** - Text labels on each frame
+- ✅ **Any node** that takes IMAGE or LAYER as input
+
+**Reference Implementation**: See `nodes/echo_layer.py:execute()` (lines 145-213)
+
+**Common Mistakes**:
+1. ❌ Only processing `layer[0]` → Effect frozen on first frame
+2. ❌ Not stacking output → Returns single frame for 50-frame input
+3. ❌ Reinitializing state inside loop → Temporal effects broken
+4. ❌ No batch detection → Crashes on multi-frame input
+
+**Verification Checklist**:
+- [ ] Code has `for i in range(batch_size):` loop
+- [ ] Each frame `layer[i]` is processed individually
+- [ ] Output uses `np.stack(output_frames, axis=0)`
+- [ ] Console shows `BATCH MODE: N frames` message
+- [ ] Console shows progress `Processed frame X/N`
+- [ ] Output tensor shape matches input: `(B, H, W, C)`
+
+---
+
 ## 🎯 Project-Specific Guidelines
 
 ### GPU Development (RTX 5090)
 ```python
 # ALWAYS provide GPU path with fallback
 def process(data, use_gpu=True):
-    if use_gpu and is_gpu_available():
+    if use_gpu and CUPY_AVAILABLE:
         return gpu_process(cp.asarray(data))
     return cpu_process(data)
 
@@ -68,20 +236,15 @@ mempool = cp.get_default_memory_pool()
 mempool.set_limit(size=8 * 1024**3)  # Use 8GB max per operation
 ```
 
-### GPU Acceleration Status (Day 1 Complete)
+### GPU Acceleration Status
 
-**✅ BBox Renderer** - GPU accelerated with SDF rendering
-- **Speedup:** 50-100× (200ms → 2-4ms @ 4K, 100 boxes)
-- **Implementation:** `utils/gpu_rendering.py` - Batched SDF kernel
-- **Parameter:** `use_gpu=True` (default) in BBoxRenderer node
-- **Testing:** Unit tests + visual regression tests passing
-
-**⏳ Line Renderer** - In progress (Day 2-3)
-- FAISS-GPU KNN for graph building
-- Tiled distance field rendering
-- Vectorized curve generation
-
-**⏳ Dot Renderer** - Planned (Day 7)
+**Current GPU-Accelerated Nodes** (see `docs/plans/GPU-STATUS.md` for details):
+- ✅ **BBox Renderer** - 2000× faster (CUDA SDF kernels)
+- ✅ **Blur Renderer** - 10-50× faster (GPU mask + GPU blur)
+- ✅ **Track Detect** - 5× faster (GPU gradient computation)
+- ✅ **Line Graph Builder** - 25× faster (FAISS-GPU kNN)
+- 🚧 **Line Rendering** - GPU graph done, line drawing CPU (Days 3-5)
+- 🚧 **Dot Renderer** - CPU (GPU target: Day 10)
 
 ### GPU Performance Logging
 All GPU-enabled nodes automatically log performance:
@@ -366,6 +529,85 @@ curve = catmull_rom_spline(points, tension=0.5)
 - Visual outputs verified
 - Mathematical correctness validated
 - Performance benchmarks documented
+
+---
+
+## 🎨 Color Picker Standard Pattern
+
+### ALWAYS Use ComfyUI COLOR Type
+
+For ALL nodes with color parameters, use ComfyUI's native `COLOR` input type:
+
+```python
+# Import color utility
+from ..utils import normalize_color_to_rgba01
+
+# INPUT_TYPES - Move color to required, alpha to optional
+"required": {
+    "color": ("COLOR", {
+        "default": "#ffffff",
+        "tooltip": "Click the color swatch to open the visual color picker"
+    }),
+},
+"optional": {
+    "alpha": ("FLOAT", {
+        "default": 1.0,
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.01,
+        "tooltip": "Transparency level (0=invisible, 1=opaque)"
+    }),
+}
+
+# execute() - Include color in signature
+def execute(self, ..., color, **kwargs):
+    # Parse color (handles HEX, named colors, legacy formats)
+    alpha = kwargs.get('alpha', 1.0)
+    rgba = normalize_color_to_rgba01(color, alpha)
+    color_rgb = rgba[:3]  # RGB tuple for rendering
+
+    print(f"[YS-NODE] Parsed color: {color} -> RGBA: {rgba}")
+    # Use color_rgb in rendering
+```
+
+### Key Rules:
+
+1. **ALWAYS** use `("COLOR", ...)` input type, not `("STRING", ...)`
+2. **ALWAYS** import `normalize_color_to_rgba01` from utils
+3. **ALWAYS** provide HEX defaults: `"#ffffff"`, `"#ff0000"`, etc.
+4. **ALWAYS** add separate `alpha` slider for transparency
+5. **ALWAYS** parse color with `normalize_color_to_rgba01(color, alpha)`
+6. **ALWAYS** extract RGB with `rgba[:3]` for rendering operations
+7. **ALWAYS** add debug logging: `print(f"[YS-NODE] Parsed color: ...")`
+8. **NEVER** parse color per-frame in batch loops (parse once in method)
+
+### Supported Formats:
+
+- **HEX**: `"#ffffff"`, `"#ff0000"`, `"#00ff00"` (primary format)
+- **Named**: `"red"`, `"blue"`, `"white"`, `"cyan"`, `"orange"`
+- **Legacy**: `"1.0,0.5,0.0"`, `[1.0, 0.5, 0.0]` (backward compatibility)
+
+### Multi-Color Nodes:
+
+For nodes with multiple colors (text + stroke, gradients):
+
+```python
+"required": {
+    "color": ("COLOR", {"default": "#ffffff"}),
+    "stroke_color": ("COLOR", {"default": "#000000"}),
+},
+
+def execute(self, ..., color, stroke_color, opacity, **kwargs):
+    text_rgba = normalize_color_to_rgba01(color, opacity)
+    stroke_rgba = normalize_color_to_rgba01(stroke_color, 1.0)
+```
+
+### Reference Implementation:
+
+- **Single Color**: `nodes/bbox_renderer.py` - Complete working example
+- **Multi-Color**: `nodes/text_on_tracks.py` - Text + stroke colors
+- **Utility**: `utils/color_utils.py` - Parsing logic
+- **Documentation**: `docs/COLOR-PICKER-IMPLEMENTATION.md`
 
 ---
 

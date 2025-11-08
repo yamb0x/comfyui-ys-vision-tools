@@ -1,6 +1,13 @@
 """
 Curved Line Renderer Node for YS-vision-tools
 Specialized node for smooth, curved line connections with preset styles
+
+🎨 COLOR PICKER SUPPORT:
+- Visual color picker UI (click the color swatch in ComfyUI)
+- Supports HEX colors: "#ffffff", "#ff0000", "#00ff00"
+- Supports named colors: "red", "orange", "cyan", "white"
+- Backward compatible with legacy float lists: [1.0, 0.5, 0.0]
+- Separate alpha slider for transparency control
 """
 
 import numpy as np
@@ -39,9 +46,19 @@ class CurvedLineRendererNode:
                     "step": 1,
                     "tooltip": "Number of nearest neighbors to connect"
                 }),
+                "color": ("COLOR", {
+                    "default": "#ffffff",
+                    "tooltip": "Click the color swatch to open the visual color picker"
+                }),
             },
             "optional": {
-                "color": ("STRING", {"default": "1.0,1.0,1.0"}),
+                "alpha": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "tooltip": "Transparency level (0=invisible, 1=opaque)"
+                }),
                 "smoothness": ("FLOAT", {
                     "default": 0.5,
                     "min": 0.0,
@@ -61,8 +78,13 @@ class CurvedLineRendererNode:
         self.advanced_node = AdvancedLineLinkRendererNode()
 
     def execute(self, tracks, image_width, image_height, style, line_thickness,
-                opacity, connections, **kwargs):
-        """Render curved lines with preset configurations"""
+                opacity, connections, color, **kwargs):
+        """Render curved lines with preset configurations
+        
+        Args:
+            color: COLOR input (hex/named color)
+            **kwargs: Optional parameters including 'alpha'
+        """
 
         # Map style to advanced node parameters
         style_configs = {
@@ -99,8 +121,9 @@ class CurvedLineRendererNode:
             "k_neighbors": connections,
             "antialiasing": "2x",
             "samples_per_curve": 50,
-            "fixed_color": kwargs.get('color', '1.0,1.0,1.0'),
-            **curve_params
+            "color": color,  # Pass COLOR input to advanced node
+            **curve_params,
+            **kwargs
         }
 
         # Call advanced node

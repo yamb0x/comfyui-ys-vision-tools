@@ -8,6 +8,277 @@ from typing import Tuple, List, Optional, Callable
 from scipy.interpolate import CubicSpline, BSpline, splrep, splev
 from scipy.spatial import distance_matrix, Voronoi, Delaunay
 from scipy.sparse.csgraph import minimum_spanning_tree
+import time
+
+# GPU imports
+try:
+    import cupy as cp
+    CUPY_AVAILABLE = True
+except ImportError:
+    CUPY_AVAILABLE = False
+
+
+class GPUCurveBatchGenerator:
+    """GPU-accelerated batch curve generation using CuPy"""
+    
+    def __init__(self, samples_per_curve: int = 50):
+        """
+        Initialize GPU batch curve generator
+        
+        Args:
+            samples_per_curve: Number of points to generate along each curve
+        """
+        self.samples = samples_per_curve
+        
+        if not CUPY_AVAILABLE:
+            raise RuntimeError("CuPy not available - cannot use GPU curve generation")
+    
+    def generate_straight_batch(self, p1_batch: cp.ndarray, p2_batch: cp.ndarray) -> cp.ndarray:
+        """
+        Generate batch of straight lines on GPU
+        
+        Args:
+            p1_batch: Start points (N, 2) on GPU
+            p2_batch: End points (N, 2) on GPU
+        
+        Returns:
+            Batch of curve points (N, samples, 2) on GPU
+        """
+        n_curves = p1_batch.shape[0]
+        t = cp.linspace(0, 1, self.samples, dtype=cp.float32)  # (samples,)
+        
+        # Vectorized interpolation: (N, 1, 2) * (1, samples, 1) = (N, samples, 2)
+        p1_exp = p1_batch[:, None, :]  # (N, 1, 2)
+        p2_exp = p2_batch[:, None, :]  # (N, 1, 2)
+        t_exp = t[None, :, None]       # (1, samples, 1)
+        
+        curves = (1 - t_exp) * p1_exp + t_exp * p2_exp
+        return curves
+    
+    def generate_quadratic_bezier_batch(self, p1_batch: cp.ndarray, p2_batch: cp.ndarray,
+                                       overshoot: float = 0.0) -> cp.ndarray:
+        """
+        Generate batch of quadratic Bezier curves on GPU
+        
+        Args:
+            p1_batch: Start points (N, 2)
+            p2_batch: End points (N, 2)
+            overshoot: Control point overshoot factor
+        
+        Returns:
+            Batch of curve points (N, samples, 2)
+        """
+        n_curves = p1_batch.shape[0]
+        t = cp.linspace(0, 1, self.samples, dtype=cp.float32)
+        
+        # Compute control points
+        mid = (p1_batch + p2_batch) / 2  # (N, 2)
+        v = p2_batch - p1_batch  # (N, 2)
+        normal = cp.stack([-v[:, 1], v[:, 0]], axis=1)  # (N, 2)
+        normal_length = cp.linalg.norm(normal, axis=1, keepdims=True)  # (N, 1)
+        normal = cp.where(normal_length > 0, normal / normal_length, normal)
+        
+        v_length = cp.linalg.norm(v, axis=1, keepdims=True)  # (N, 1)
+        control = mid + normal * v_length * (0.3 + overshoot)  # (N, 2)
+        
+        # Quadratic Bezier formula: B(t) = (1-t)²·P0 + 2(1-t)t·P1 + t²·P2
+        p1_exp = p1_batch[:, None, :]     # (N, 1, 2)
+        p2_exp = p2_batch[:, None, :]     # (N, 1, 2)
+        control_exp = control[:, None, :] # (N, 1, 2)
+        t_exp = t[None, :, None]          # (1, samples, 1)
+        
+        curves = ((1 - t_exp)**2 * p1_exp +
+                 2 * (1 - t_exp) * t_exp * control_exp +
+                 t_exp**2 * p2_exp)
+        
+        return curves
+    
+    def generate_cubic_bezier_batch(self, p1_batch: cp.ndarray, p2_batch: cp.ndarray,
+                                    overshoot: float = 0.0,
+                                    control_offset: float = 0.3) -> cp.ndarray:
+        """
+        Generate batch of cubic Bezier curves on GPU
+        
+        Args:
+            p1_batch: Start points (N, 2)
+            p2_batch: End points (N, 2)
+            overshoot: Control point overshoot factor
+            control_offset: Position of control points (0-1)
+        
+        Returns:
+            Batch of curve points (N, samples, 2)
+        """
+        n_curves = p1_batch.shape[0]
+        t = cp.linspace(0, 1, self.samples, dtype=cp.float32)
+        
+        # Compute two control points
+        v = p2_batch - p1_batch  # (N, 2)
+        normal = cp.stack([-v[:, 1], v[:, 0]], axis=1)  # (N, 2)
+        normal_length = cp.linalg.norm(normal, axis=1, keepdims=True)
+        normal = cp.where(normal_length > 0, normal / normal_length, normal)
+        
+        v_length = cp.linalg.norm(v, axis=1, keepdims=True)
+        
+        c1 = p1_batch + v * control_offset + normal * v_length * (0.2 + overshoot)
+        c2 = p2_batch - v * control_offset + normal * v_length * (0.2 - overshoot)
+        
+        # Cubic Bezier formula
+        p1_exp = p1_batch[:, None, :]  # (N, 1, 2)
+        p2_exp = p2_batch[:, None, :]  # (N, 1, 2)
+        c1_exp = c1[:, None, :]        # (N, 1, 2)
+        c2_exp = c2[:, None, :]        # (N, 1, 2)
+        t_exp = t[None, :, None]       # (1, samples, 1)
+        
+        curves = ((1 - t_exp)**3 * p1_exp +
+                 3 * (1 - t_exp)**2 * t_exp * c1_exp +
+                 3 * (1 - t_exp) * t_exp**2 * c2_exp +
+                 t_exp**3 * p2_exp)
+        
+        return curves
+    
+    def generate_catmull_rom_batch(self, p1_batch: cp.ndarray, p2_batch: cp.ndarray,
+                                   tension: float = 0.5) -> cp.ndarray:
+        """
+        Generate batch of Catmull-Rom splines on GPU
+        
+        Args:
+            p1_batch: Start points (N, 2)
+            p2_batch: End points (N, 2)
+            tension: Tension parameter
+        
+        Returns:
+            Batch of curve points (N, samples, 2)
+        """
+        n_curves = p1_batch.shape[0]
+        t = cp.linspace(0, 1, self.samples, dtype=cp.float32)
+        
+        # Virtual points
+        p0 = p1_batch - (p2_batch - p1_batch) * 0.5  # (N, 2)
+        p3 = p2_batch + (p2_batch - p1_batch) * 0.5  # (N, 2)
+        
+        # Catmull-Rom matrix coefficients
+        t_exp = t[None, :, None]  # (1, samples, 1)
+        t2 = t_exp * t_exp
+        t3 = t2 * t_exp
+        
+        # Coefficient vectors
+        coef_p0 = -tension * t3 + 2 * tension * t2 - tension * t_exp
+        coef_p1 = (2 - tension) * t3 + (tension - 3) * t2 + 1
+        coef_p2 = (tension - 2) * t3 + (3 - 2 * tension) * t2 + tension * t_exp
+        coef_p3 = tension * t3 - tension * t2
+        
+        # Apply to all curves
+        curves = (coef_p0 * p0[:, None, :] +
+                 coef_p1 * p1_batch[:, None, :] +
+                 coef_p2 * p2_batch[:, None, :] +
+                 coef_p3 * p3[:, None, :])
+        
+        return curves
+    
+    def generate_logarithmic_spiral_batch(self, p1_batch: cp.ndarray, p2_batch: cp.ndarray,
+                                         turns: float = 0.5) -> cp.ndarray:
+        """
+        Generate batch of logarithmic spirals on GPU
+        
+        Args:
+            p1_batch: Start points (N, 2)
+            p2_batch: End points (N, 2)
+            turns: Number of spiral turns
+        
+        Returns:
+            Batch of curve points (N, samples, 2)
+        """
+        n_curves = p1_batch.shape[0]
+        
+        # Convert to polar
+        dx = p2_batch[:, 0] - p1_batch[:, 0]  # (N,)
+        dy = p2_batch[:, 1] - p1_batch[:, 1]  # (N,)
+        r_end = cp.sqrt(dx**2 + dy**2)        # (N,)
+        theta_end = cp.arctan2(dy, dx)        # (N,)
+        
+        # Spiral parameters
+        a = 1.0
+        theta_total = theta_end + 2 * cp.pi * turns
+        b = cp.where(theta_total != 0, cp.log(r_end) / theta_total, 0.0)  # (N,)
+        
+        # Generate spiral
+        theta = cp.linspace(0, 1, self.samples, dtype=cp.float32)  # (samples,)
+        theta = theta[None, :] * theta_total[:, None]  # (N, samples)
+        
+        r = a * cp.exp(b[:, None] * theta)  # (N, samples)
+        
+        # Convert back to Cartesian
+        x = p1_batch[:, 0:1] + r * cp.cos(theta)  # (N, samples)
+        y = p1_batch[:, 1:2] + r * cp.sin(theta)  # (N, samples)
+        
+        curves = cp.stack([x, y], axis=2)  # (N, samples, 2)
+        return curves
+    
+    def generate_elastic_batch(self, p1_batch: cp.ndarray, p2_batch: cp.ndarray,
+                              stiffness: float = 0.5) -> cp.ndarray:
+        """
+        Generate batch of elastic curves on GPU
+        
+        Args:
+            p1_batch: Start points (N, 2)
+            p2_batch: End points (N, 2)
+            stiffness: Elastic stiffness
+        
+        Returns:
+            Batch of curve points (N, samples, 2)
+        """
+        n_curves = p1_batch.shape[0]
+        t = cp.linspace(0, 1, self.samples, dtype=cp.float32)
+        
+        # Base line
+        t_exp = t[None, :, None]  # (1, samples, 1)
+        base = (1 - t_exp) * p1_batch[:, None, :] + t_exp * p2_batch[:, None, :]
+        
+        # Perpendicular direction
+        v = p2_batch - p1_batch  # (N, 2)
+        normal = cp.stack([-v[:, 1], v[:, 0]], axis=1)  # (N, 2)
+        normal_length = cp.linalg.norm(normal, axis=1, keepdims=True)
+        normal = cp.where(normal_length > 0, normal / normal_length, normal)
+        
+        # Damped oscillation
+        oscillation = cp.sin(t * cp.pi * 4) * (1 - t) * stiffness * 20  # (samples,)
+        
+        # Apply perpendicular to base
+        offset = oscillation[None, :, None] * normal[:, None, :]  # (N, samples, 2)
+        curves = base + offset
+        
+        return curves
+    
+    def generate_gravitational_batch(self, p1_batch: cp.ndarray, p2_batch: cp.ndarray,
+                                     gravity_strength: float = 0.1) -> cp.ndarray:
+        """
+        Generate batch of gravitational paths on GPU
+        
+        Args:
+            p1_batch: Start points (N, 2)
+            p2_batch: End points (N, 2)
+            gravity_strength: Gravity influence
+        
+        Returns:
+            Batch of curve points (N, samples, 2)
+        """
+        n_curves = p1_batch.shape[0]
+        t = cp.linspace(0, 1, self.samples, dtype=cp.float32)
+        t_exp = t[None, :, None]  # (1, samples, 1)
+        
+        # Linear interpolation
+        base_x = p1_batch[:, 0:1] * (1 - t) + p2_batch[:, 0:1] * t  # (N, samples)
+        base_y = p1_batch[:, 1:2] * (1 - t) + p2_batch[:, 1:2] * t  # (N, samples)
+        
+        # Parabolic drop
+        v_length = cp.linalg.norm(p2_batch - p1_batch, axis=1, keepdims=True)  # (N, 1)
+        gravity_drop = -4 * t * (1 - t) * v_length * gravity_strength  # (N, samples)
+        
+        x = base_x
+        y = base_y + gravity_drop
+        
+        curves = cp.stack([x, y], axis=2)  # (N, samples, 2)
+        return curves
 
 
 class CurveGenerator:

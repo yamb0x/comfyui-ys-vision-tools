@@ -191,9 +191,14 @@ class EnhancedTrackDetectNode:
         if use_gpu and CUPY_AVAILABLE:
             img_gpu = cp.asarray(gray.astype(np.float32))
 
-            # Scharr operator (more accurate than Sobel)
-            grad_x = cp.asarray(cv2.Scharr(gray, cv2.CV_64F, 1, 0))
-            grad_y = cp.asarray(cv2.Scharr(gray, cv2.CV_64F, 0, 1))
+            # Scharr operator (more accurate than Sobel) - FULLY GPU-NATIVE
+            scharr_x = cp.array([[-3, 0, 3], [-10, 0, 10], [-3, 0, 3]], dtype=cp.float32)
+            scharr_y = cp.array([[-3, -10, -3], [0, 0, 0], [3, 10, 3]], dtype=cp.float32)
+            
+            # Gradient computation on GPU
+            from cupyx.scipy import ndimage as cp_ndimage
+            grad_x = cp_ndimage.convolve(img_gpu, scharr_x, mode='reflect')
+            grad_y = cp_ndimage.convolve(img_gpu, scharr_y, mode='reflect')
 
             # Gradient magnitude and angle
             magnitude = cp.sqrt(grad_x**2 + grad_y**2)
@@ -306,19 +311,23 @@ class EnhancedTrackDetectNode:
         if use_gpu and CUPY_AVAILABLE:
             img_gpu = cp.asarray(gray.astype(np.float32))
 
-            # Compute gradients
-            Ix = cp.asarray(cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3))
-            Iy = cp.asarray(cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3))
+            # Compute gradients on GPU using Sobel kernels
+            from cupyx.scipy import ndimage as cp_ndimage
+            sobel_x = cp.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=cp.float32) / 8.0
+            sobel_y = cp.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=cp.float32) / 8.0
+            
+            Ix = cp_ndimage.convolve(img_gpu, sobel_x, mode='reflect')
+            Iy = cp_ndimage.convolve(img_gpu, sobel_y, mode='reflect')
 
             # Structure tensor components
             Ixx = Ix * Ix
             Iyy = Iy * Iy
             Ixy = Ix * Iy
 
-            # Gaussian smoothing
-            Ixx_smooth = cp.asarray(cv2.GaussianBlur(cp.asnumpy(Ixx), (5, 5), 1.5))
-            Iyy_smooth = cp.asarray(cv2.GaussianBlur(cp.asnumpy(Iyy), (5, 5), 1.5))
-            Ixy_smooth = cp.asarray(cv2.GaussianBlur(cp.asnumpy(Ixy), (5, 5), 1.5))
+            # Gaussian smoothing on GPU
+            Ixx_smooth = cp_ndimage.gaussian_filter(Ixx, sigma=1.5)
+            Iyy_smooth = cp_ndimage.gaussian_filter(Iyy, sigma=1.5)
+            Ixy_smooth = cp_ndimage.gaussian_filter(Ixy, sigma=1.5)
 
             # Compute eigenvalues (Shi-Tomasi corner response)
             trace = Ixx_smooth + Iyy_smooth
@@ -359,7 +368,13 @@ class EnhancedTrackDetectNode:
 
     def _detect_optical_flow(self, image: np.ndarray, previous_frame: Optional[Any],
                             use_gpu: bool, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
-        """Optical flow-based detection"""
+        """
+        Optical flow-based detection
+        
+        Note: OpenCV's Farneback optical flow is CPU-only in standard opencv-python.
+        GPU acceleration would require opencv-contrib-python with CUDA support.
+        For best performance, use gradient_magnitude or phase_congruency instead.
+        """
 
         if previous_frame is None:
             # Fall back to gradient-based detection
@@ -409,18 +424,84 @@ class EnhancedTrackDetectNode:
                         use_gpu: bool) -> Tuple[np.ndarray, np.ndarray]:
         """Detect using saliency map (visual attention)"""
 
-        # Convert to uint8 for OpenCV saliency
+        # Convert to uint8 for OpenCV saliency (CPU path)
         if image.max() <= 1.0:
             image_uint8 = (image * 255).astype(np.uint8)
         else:
             image_uint8 = image.astype(np.uint8)
+        
+        # GPU path using CuPy FFT-based spectral residual
+        if use_gpu and CUPY_AVAILABLE:
+            # Convert to grayscale if needed
+            if len(image_uint8.shape) == 3:
+                gray = cp.asarray(cv2.cvtColor(image_uint8, cv2.COLOR_RGB2GRAY).astype(np.float32))
+            else:
+                gray = cp.asarray(image_uint8.astype(np.float32))
+            
+            # Spectral residual saliency on GPU
+            # FFT
+            fft = cp.fft.fft2(gray)
+            amplitude = cp.abs(fft)
+            phase = cp.angle(fft)
+            
+            # Log amplitude
+            log_amplitude = cp.log(amplitude + 1e-8)
+            
+            # Spectral residual (difference from average)
+            from cupyx.scipy import ndimage as cp_ndimage
+            avg_filter = cp_ndimage.uniform_filter(log_amplitude, size=3)
+            spectral_residual = log_amplitude - avg_filter
+            
+            # Reconstruct with phase
+            saliency_fft = cp.exp(spectral_residual + 1j * phase)
+            
+            # Inverse FFT
+            saliency = cp.abs(cp.fft.ifft2(saliency_fft))
+            
+            # Smooth with Gaussian
+            saliency = cp_ndimage.gaussian_filter(saliency, sigma=2.5)
+            
+            # Normalize to [0, 1]
+            saliency_min = cp.min(saliency)
+            saliency_max = cp.max(saliency)
+            saliency_normalized = (saliency - saliency_min) / (saliency_max - saliency_min + 1e-8)
+            
+            # Threshold saliency map
+            threshold = cp.percentile(saliency_normalized, (1 - sensitivity) * 100)
+            mask = saliency_normalized > threshold
+            
+            points = cp.argwhere(mask)
+            
+            if len(points) > 0:
+                tracks = cp.asnumpy(points[:, [1, 0]])  # Convert to (x, y)
+                features = cp.asnumpy(saliency_normalized[points[:, 0], points[:, 1]])
+            else:
+                tracks = np.empty((0, 2))
+                features = np.empty(0)
+            
+            return tracks, features
 
-        # Use OpenCV's static saliency detector
-        saliency = cv2.saliency.StaticSaliencySpectralResidual_create()
-        success, saliency_map = saliency.computeSaliency(image_uint8)
-
-        if not success:
-            return np.empty((0, 2)), np.empty(0)
+        # CPU path: Try OpenCV saliency (if available) or fallback
+        try:
+            # Try newer API first
+            if hasattr(cv2.saliency, 'StaticSaliencySpectralResidual_create'):
+                saliency = cv2.saliency.StaticSaliencySpectralResidual_create()
+                success, saliency_map = saliency.computeSaliency(image_uint8)
+            elif hasattr(cv2, 'saliency_StaticSaliencySpectralResidual'):
+                # Older API
+                saliency = cv2.saliency_StaticSaliencySpectralResidual()
+                success, saliency_map = saliency.computeSaliency(image_uint8)
+            else:
+                # Saliency not available, use fallback
+                raise AttributeError("OpenCV saliency not available")
+                
+            if not success:
+                raise RuntimeError("Saliency computation failed")
+                
+        except (AttributeError, RuntimeError) as e:
+            print(f"[YS-TRACK] OpenCV saliency not available ({e}), using spectral residual fallback")
+            # Fallback: Spectral Residual implementation (simplified)
+            saliency_map = self._compute_spectral_residual_fallback(image_uint8)
 
         # Threshold saliency map
         threshold = np.percentile(saliency_map, (1 - sensitivity) * 100)
@@ -436,6 +517,47 @@ class EnhancedTrackDetectNode:
             features = np.empty(0)
 
         return tracks, features
+    
+    def _compute_spectral_residual_fallback(self, image_uint8: np.ndarray) -> np.ndarray:
+        """
+        Fallback spectral residual saliency when OpenCV saliency module not available.
+        
+        Based on: Hou, X., & Zhang, L. (2007). Saliency detection: A spectral residual approach.
+        """
+        # Convert to grayscale if needed
+        if len(image_uint8.shape) == 3:
+            gray = cv2.cvtColor(image_uint8, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = image_uint8
+        
+        # Convert to float
+        img_float = gray.astype(np.float32)
+        
+        # FFT
+        fft = np.fft.fft2(img_float)
+        amplitude = np.abs(fft)
+        phase = np.angle(fft)
+        
+        # Log amplitude
+        log_amplitude = np.log(amplitude + 1e-8)
+        
+        # Spectral residual (difference from average)
+        avg_filter = cv2.boxFilter(log_amplitude, -1, (3, 3))
+        spectral_residual = log_amplitude - avg_filter
+        
+        # Reconstruct with phase
+        saliency_fft = np.exp(spectral_residual + 1j * phase)
+        
+        # Inverse FFT
+        saliency = np.abs(np.fft.ifft2(saliency_fft))
+        
+        # Smooth with Gaussian
+        saliency = cv2.GaussianBlur(saliency, (9, 9), 2.5)
+        
+        # Normalize to [0, 1]
+        saliency = (saliency - saliency.min()) / (saliency.max() - saliency.min() + 1e-8)
+        
+        return saliency.astype(np.float32)
 
     def _detect_objects(self, image: np.ndarray, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         """Object detection using YOLO"""
@@ -621,5 +743,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "YS_TrackDetect": "Track Detect (Enhanced) 🎯"
+    "YS_TrackDetect": "2D Tracker (Object/Motion) 🎯"
 }

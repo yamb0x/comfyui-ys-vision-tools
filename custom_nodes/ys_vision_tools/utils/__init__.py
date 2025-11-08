@@ -23,7 +23,23 @@ from .image_utils import (
 )
 from .curve_math import (
     CurveGenerator,
-    GraphBuilder
+    GraphBuilder,
+    GPUCurveBatchGenerator,
+    CUPY_AVAILABLE
+)
+from .optical_flow import (
+    backward_warp,
+    backward_warp_gpu,
+    backward_warp_cpu,
+    estimate_optical_flow_gpu
+)
+from .sdf_font import (
+    SDFFontAtlas,
+    get_font_atlas
+)
+from .color_utils import (
+    normalize_color_to_rgba01,
+    parse_legacy_color_string
 )
 
 __all__ = [
@@ -49,4 +65,20 @@ __all__ = [
     # Curve math
     'CurveGenerator',
     'GraphBuilder',
+    'GPUCurveBatchGenerator',
+    'CUPY_AVAILABLE',
+
+    # Optical flow
+    'backward_warp',
+    'backward_warp_gpu',
+    'backward_warp_cpu',
+    'estimate_optical_flow_gpu',
+
+    # SDF font rendering
+    'SDFFontAtlas',
+    'get_font_atlas',
+
+    # Color utilities
+    'normalize_color_to_rgba01',
+    'parse_legacy_color_string',
 ]

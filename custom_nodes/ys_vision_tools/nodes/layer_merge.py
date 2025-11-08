@@ -30,6 +30,7 @@ class LayerMergeNode:
                     "overlay",
                     "max",
                     "min",
+                    "difference",
                 ],),
                 "opacity": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
             },
@@ -128,6 +129,8 @@ class LayerMergeNode:
             result = self._blend_screen(l1, l2)
         elif blend_mode == "overlay":
             result = self._blend_overlay(l1, l2)
+        elif blend_mode == "difference":
+            result = self._blend_difference(l1, l2)
         elif blend_mode == "max":
             result = self._blend_max(l1, l2)
         elif blend_mode == "min":
@@ -228,6 +231,10 @@ class LayerMergeNode:
     def _blend_min(self, base: np.ndarray, top: np.ndarray) -> np.ndarray:
         """Minimum blending"""
         return np.minimum(base, top)
+    
+    def _blend_difference(self, base: np.ndarray, top: np.ndarray) -> np.ndarray:
+        """Difference blending (absolute difference)"""
+        return np.abs(base - top)
 
 
 NODE_CLASS_MAPPINGS = {
